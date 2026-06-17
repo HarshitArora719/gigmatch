@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
 @theme {
-  /* You can add custom theme extensions here later */
+  /* Custom theme extensions can go here */
+}
+
+body {
+  font-family: 'Inter', system_ui, sans-serif;
 }
