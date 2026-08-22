@@ -11,7 +11,14 @@ export const getMe = asyncHandler(async (req: any, res: Response) => {
     return ApiResponse.error(res, 'User not found', 404);
   }
 
-  return ApiResponse.success(res, { user });
+  return ApiResponse.success(res, {
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+    },
+  });
 });
 
 export const createOrUpdateProfile = asyncHandler(async (req: any, res: Response) => {

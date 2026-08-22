@@ -10,6 +10,7 @@ export interface IProfile extends Document {
   portfolio: Array<{
     title: string;
     url: string;
+    publicId: string;
     description?: string;
   }>;
   rating: number;
@@ -27,6 +28,7 @@ const ProfileSchema = new Schema<IProfile>({
   portfolio: [{
     title: String,
     url: String,
+    publicId: String,
     description: String,
   }],
   rating: { type: Number, default: 0 },

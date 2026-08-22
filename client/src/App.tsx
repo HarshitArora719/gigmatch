@@ -1,51 +1,62 @@
-import { Button } from './components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card'
+import { useEffect } from 'react';
+import { Routes, Route, useLocation } from 'react-router-dom';
+import { useAuthStore } from './store/authStore';
+import Navbar from './components/Navbar';
+import Footer from './components/Footer';
+import Home from './pages/Home';
+import Gigs from './pages/Gigs';
+import GigDetail from './pages/GigDetail';
+import PostGig from './pages/PostGig';
+import Dashboard from './pages/Dashboard';
+import Workspace from './pages/Workspace';
+import Profile from './pages/Profile';
+import EditProfile from './pages/EditProfile';
+import AuthModal from './components/AuthModal';
 
-function App() {
+function AppRoutes() {
+  const location = useLocation();
+  const isDashboardOrWorkspace = location.pathname.startsWith('/dashboard') || location.pathname.startsWith('/workspace');
+
+  // Scroll to top on route change
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-white">
-      <div className="max-w-7xl mx-auto px-6 py-12">
-        <div className="text-center mb-12">
-          <h1 className="text-6xl font-bold mb-4 bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-            GigMatch
-          </h1>
-          <p className="text-xl text-zinc-400">Freelance Marketplace for Indian Creators</p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card className="bg-zinc-900 border-zinc-800">
-            <CardHeader>
-              <CardTitle>Find Gigs</CardTitle>
-              <CardDescription>Browse thousands of micro-gigs</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button className="w-full">Browse Gigs</Button>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-zinc-900 border-zinc-800">
-            <CardHeader>
-              <CardTitle>Post a Gig</CardTitle>
-              <CardDescription>Hire talented freelancers</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="secondary" className="w-full">Post Requirement</Button>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-zinc-900 border-zinc-800">
-            <CardHeader>
-              <CardTitle>Build Portfolio</CardTitle>
-              <CardDescription>Showcase your work</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button variant="outline" className="w-full">Create Profile</Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
-  )
+    <>
+      {!isDashboardOrWorkspace && <Navbar />}
+      <main className="flex-1 flex flex-col">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/gigs" element={<Gigs />} />
+          <Route path="/gigs/:id" element={<GigDetail />} />
+          <Route path="/post-gig" element={<PostGig />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/workspace" element={<Workspace />} />
+          <Route path="/workspace/:id" element={<Workspace />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/profile/edit" element={<EditProfile />} />
+          <Route path="/edit-profile" element={<EditProfile />} />
+        </Routes>
+      </main>
+      {!isDashboardOrWorkspace && <Footer />}
+    </>
+  );
 }
 
-export default App
+function App() {
+  const { fetchMe } = useAuthStore();
+
+  useEffect(() => {
+    fetchMe();
+  }, [fetchMe]);
+
+  return (
+    <div className="flex min-h-screen flex-col bg-paper text-ink">
+      <AppRoutes />
+      <AuthModal />
+    </div>
+  );
+}
+
+export default App;

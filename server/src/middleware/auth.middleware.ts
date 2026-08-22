@@ -9,7 +9,7 @@ export const protect = (req: AuthRequest, res: Response, next: NextFunction) => 
   const token = req.cookies.token;
 
   if (!token) {
-    return res.status(401).json({ success: false, message: 'Not authorized' });
+    return res.status(401).json({ success: false, message: 'Please login first' });
   }
 
   try {
@@ -17,6 +17,19 @@ export const protect = (req: AuthRequest, res: Response, next: NextFunction) => 
     req.user = decoded;
     next();
   } catch (error) {
-    return res.status(401).json({ success: false, message: 'Invalid token' });
+    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
+};
+
+// Role-based protection
+export const restrictTo = (...roles: string[]) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ 
+        success: false, 
+        message: `Only ${roles.join(' or ')} can access this route` 
+      });
+    }
+    next();
+  };
 };

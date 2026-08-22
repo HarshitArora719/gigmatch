@@ -33,9 +33,23 @@ app.get('/health', (req, res) => {
 // Import routes
 import authRoutes from './routes/auth.routes';
 import userRoutes from './routes/user.routes';
+import gigRoutes from './routes/gig.routes';
+import proposalRoutes from './routes/proposal.routes';
+import orderRoutes from './routes/order.routes';
+import messageRoutes from './routes/message.routes';
+import paymentRoutes from './routes/payment.routes';
+import reviewRoutes from './routes/review.routes';
+import uploadRoutes from './routes/upload.routes';
 
 // Use routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/gigs', gigRoutes);
+app.use('/api/proposals', proposalRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/messages', messageRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/uploads', uploadRoutes);
 
 export default app;
