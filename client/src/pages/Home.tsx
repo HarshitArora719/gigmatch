@@ -1,39 +1,16 @@
 import { useNavigate } from 'react-router-dom';
-import { Search, Sparkles, ArrowUpRight } from 'lucide-react';
-import { useState } from 'react';
+import { Search, Sparkles, ArrowUpRight, Briefcase } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
 import AnimatedSection from '../components/AnimatedSection';
+import api from '../lib/axios';
 
 /* ──────────────────────────────────────────────
    DATA
    ────────────────────────────────────────────── */
 
-const opportunities = [
-  {
-    bg: 'bg-cyan',
-    rotate: '-rotate-[2deg]',
-    match: '92%',
-    title: 'AI Platform Engineer',
-    meta: '$7,000–$9,000 · Hybrid',
-    skills: ['Python', 'LLMs'],
-  },
-  {
-    bg: 'bg-coral',
-    rotate: 'rotate-[2deg]',
-    match: '89%',
-    title: 'Node.js Systems Build',
-    meta: '$5,000–$7,500 · Remote',
-    skills: ['Node.js', 'AWS'],
-  },
-  {
-    bg: 'bg-orange',
-    rotate: '-rotate-[1deg]',
-    match: '96%',
-    title: 'Product Design Sprint',
-    meta: '$4,500–$6,000 · Remote',
-    skills: ['Figma', 'Strategy'],
-  },
-];
+const opportunityColors = ['#22D3EE', '#FF6B6B', '#FFB347', '#A3E635', '#D8B4FE', '#F9A8D4'];
+const opportunityRotations = ['-rotate-[2deg]', 'rotate-[2deg]', '-rotate-[1deg]'];
 
 const benefits = [
   {
@@ -93,6 +70,23 @@ export default function Home() {
   const { setAuthModal } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
+  const [featuredGigs, setFeaturedGigs] = useState<any[]>([]);
+  const [loadingGigs, setLoadingGigs] = useState(true);
+
+  useEffect(() => {
+    const fetchGigs = async () => {
+      try {
+        setLoadingGigs(true);
+        const res = await api.get('/api/gigs?limit=3');
+        setFeaturedGigs(res.data.data.gigs || []);
+      } catch (err) {
+        console.error('Failed to fetch featured gigs:', err);
+      } finally {
+        setLoadingGigs(false);
+      }
+    };
+    fetchGigs();
+  }, []);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -229,48 +223,86 @@ export default function Home() {
           </AnimatedSection>
 
           {/* Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-7 max-w-[1000px] mx-auto">
-            {opportunities.map((opp, i) => (
-              <AnimatedSection key={opp.title} delay={i * 120}>
+          {loadingGigs ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-7 max-w-[1000px] mx-auto">
+              {Array.from({ length: 3 }).map((_, i) => (
                 <div
-                  className={`${opp.bg} ${opp.rotate} rounded-[28px] p-7 md:p-8 flex flex-col justify-between min-h-[320px] transition-all duration-300 ease-out hover:!rotate-0 hover:scale-[1.06] hover:-translate-y-3 hover:shadow-[0_24px_70px_rgba(0,0,0,0.18)] cursor-pointer group`}
-                >
-                  {/* Match badge */}
-                  <div className="flex items-center justify-between mb-6">
-                    <span className="inline-flex items-center px-3 py-1 rounded-full bg-ink/10 text-ink text-xs font-bold tracking-wide">
-                      {opp.match} MATCH
-                    </span>
-                  </div>
+                  key={`skeleton-home-${i}`}
+                  className="rounded-[28px] bg-soft animate-pulse min-h-[320px] p-8 border border-border/40"
+                />
+              ))}
+            </div>
+          ) : featuredGigs.length === 0 ? (
+            <div className="max-w-[600px] mx-auto text-center py-12 px-6 rounded-[28px] bg-white border border-dashed border-ink/15 space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-soft flex items-center justify-center mx-auto text-ink/40">
+                <Briefcase size={22} />
+              </div>
+              <h3 className="font-display font-bold text-ink text-lg">No open gigs posted yet</h3>
+              <p className="text-xs text-ink/50 font-medium max-w-sm mx-auto">
+                Be the first to create an open brief and receive proposals from creative pros.
+              </p>
+              <button
+                onClick={() => navigate('/post-gig')}
+                className="btn-primary !py-2 !px-5 !text-xs mt-2"
+              >
+                Post a Gig
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-7 max-w-[1000px] mx-auto">
+              {featuredGigs.map((gig, i) => {
+                const color = opportunityColors[i % opportunityColors.length];
+                const rotation = opportunityRotations[i % opportunityRotations.length];
+                const categoryLabel = (gig.category || 'General').replace('-', ' ');
+                const tags = (gig.tags && gig.tags.length > 0) ? gig.tags.slice(0, 3) : [categoryLabel];
 
-                  {/* Title */}
-                  <div className="flex-1 flex flex-col justify-end">
-                    <h3 className="font-display font-extrabold text-ink text-xl md:text-2xl tracking-normal mb-2 leading-snug">
-                      {opp.title}
-                    </h3>
-                    <p className="text-ink/70 text-sm font-medium mb-4">{opp.meta}</p>
-
-                    {/* Skills */}
-                    <div className="flex flex-wrap gap-2 mb-5">
-                      {opp.skills.map(skill => (
-                        <span
-                          key={skill}
-                          className="px-3 py-1 rounded-full bg-ink/8 text-ink text-xs font-semibold"
-                        >
-                          {skill}
+                return (
+                  <AnimatedSection key={gig._id} delay={i * 120}>
+                    <div
+                      onClick={() => navigate(`/gigs/${gig._id}`)}
+                      className={`${rotation} rounded-[28px] p-7 md:p-8 flex flex-col justify-between min-h-[320px] transition-all duration-300 ease-out hover:!rotate-0 hover:scale-[1.06] hover:-translate-y-3 hover:shadow-[0_24px_70px_rgba(0,0,0,0.18)] cursor-pointer group`}
+                      style={{ backgroundColor: color }}
+                    >
+                      {/* Category badge */}
+                      <div className="flex items-center justify-between mb-6">
+                        <span className="inline-flex items-center px-3 py-1 rounded-full bg-ink/10 text-ink text-xs font-bold tracking-wide capitalize">
+                          {categoryLabel}
                         </span>
-                      ))}
-                    </div>
+                      </div>
 
-                    {/* CTA */}
-                    <div className="flex items-center gap-1.5 text-ink font-bold text-sm group-hover:gap-2.5 transition-all">
-                      View the brief
-                      <ArrowUpRight size={16} className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                      {/* Title & details */}
+                      <div className="flex-1 flex flex-col justify-end">
+                        <h3 className="font-display font-extrabold text-ink text-xl md:text-2xl tracking-normal mb-2 leading-snug line-clamp-2">
+                          {gig.title}
+                        </h3>
+                        <p className="text-ink/75 text-sm font-bold mb-4">
+                          ₹{Number(gig.budget || 0).toLocaleString('en-IN')} · {gig.client?.name || 'Verified Client'}
+                        </p>
+
+                        {/* Skills */}
+                        <div className="flex flex-wrap gap-2 mb-5">
+                          {tags.map((skill: string) => (
+                            <span
+                              key={skill}
+                              className="px-3 py-1 rounded-full bg-ink/10 text-ink text-xs font-semibold"
+                            >
+                              {skill}
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* CTA */}
+                        <div className="flex items-center gap-1.5 text-ink font-bold text-sm group-hover:gap-2.5 transition-all">
+                          View the brief
+                          <ArrowUpRight size={16} className="transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </AnimatedSection>
-            ))}
-          </div>
+                  </AnimatedSection>
+                );
+              })}
+            </div>
+          )}
         </div>
       </section>
 

@@ -3,30 +3,24 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/axios';
 import { useAuthStore } from '../store/authStore';
 import {
-  IndianRupee,
   CheckCircle2,
-  Calendar,
-  Lock,
   Send,
-  User,
   Clock,
   FileText,
   ChevronRight,
   Bookmark,
   Share2,
   ShieldCheck,
-  Briefcase,
   Sparkles,
   MapPin,
-  FileCode,
   Download,
-  ExternalLink,
   Eye,
   MessageSquare,
   ArrowUpRight,
-  Layers,
   Check,
-  AlertCircle
+  AlertCircle,
+  Image as ImageIcon,
+  Paperclip
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/skeleton';
@@ -94,9 +88,11 @@ export default function GigDetail() {
       });
       toast.success('Proposal submitted successfully!');
       setShowProposal(false);
+      navigate('/my-proposals');
     } catch (e: any) {
       toast.error(e.response?.data?.message || 'Failed to submit proposal');
     } finally {
+      setLoading(false);
       setSubmitting(false);
     }
   };
@@ -141,38 +137,8 @@ export default function GigDetail() {
     formEl?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Fallback similar gigs if backend has none
-  const defaultSimilarGigs = [
-    {
-      _id: 'sim-1',
-      title: 'Full Brand Visual Identity & Design System',
-      category: 'Design & Creative',
-      budget: 12000,
-      postedDate: '1 day ago',
-      tags: ['Figma', 'Branding', 'Typography'],
-      bg: '#22D3EE',
-    },
-    {
-      _id: 'sim-2',
-      title: 'Interactive 3D Web Experience with GSAP & WebGL',
-      category: 'Development',
-      budget: 18500,
-      postedDate: '3 days ago',
-      tags: ['React', 'Three.js', 'Tailwind'],
-      bg: '#FFB347',
-    },
-    {
-      _id: 'sim-3',
-      title: 'Editorial Copywriting & Product Launch Narrative',
-      category: 'Writing & Editorial',
-      budget: 6500,
-      postedDate: '4 days ago',
-      tags: ['Copywriting', 'SEO', 'Editorial'],
-      bg: '#FF6B6B',
-    }
-  ];
-
-  const displayedSimilarGigs = similarGigs.length > 0 ? similarGigs : defaultSimilarGigs;
+  // Fetch similar gigs in the same category
+  const displayedSimilarGigs = similarGigs;
 
   if (loading) {
     return (
@@ -228,6 +194,34 @@ export default function GigDetail() {
   const bidPriceNumber = Number(proposal.proposedPrice) || 0;
   const platformFee = Math.round(bidPriceNumber * 0.05);
   const netEarnings = Math.max(0, bidPriceNumber - platformFee);
+
+  // Normalize attachments list from gig.attachments and gig.images
+  const rawAttachments: Array<{ name: string; url: string; size?: number; type?: string }> = [];
+  if (gig.attachments && Array.isArray(gig.attachments)) {
+    gig.attachments.forEach((att: any, i: number) => {
+      if (typeof att === 'string') {
+        rawAttachments.push({ name: `Attachment ${i + 1}`, url: att });
+      } else if (att?.url) {
+        rawAttachments.push({
+          name: att.name || `Attachment ${i + 1}`,
+          url: att.url,
+          size: att.size,
+          type: att.type,
+        });
+      }
+    });
+  } else if (gig.images && Array.isArray(gig.images)) {
+    gig.images.forEach((img: string, i: number) => {
+      rawAttachments.push({ name: `Project Asset ${i + 1}`, url: img, type: 'image/jpeg' });
+    });
+  }
+
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  };
 
   return (
     <div className="min-h-screen bg-paper text-ink pb-24 antialiased selection:bg-purple/15 selection:text-ink">
@@ -438,46 +432,98 @@ export default function GigDetail() {
                     Project Attachments & Assets
                   </h2>
                   <p className="text-xs sm:text-sm text-ink/50 font-medium mt-0.5">
-                    Supplemental documentation, wireframes, and design guidelines.
+                    Supplemental documentation, wireframes, and design guidelines uploaded by the employer.
                   </p>
                 </div>
-                <span className="eyebrow text-ink/40">ATTACHMENTS</span>
+                <span className="eyebrow text-ink/40">
+                  {rawAttachments.length > 0 ? `${rawAttachments.length} ATTACHED` : 'ATTACHMENTS'}
+                </span>
               </div>
 
-              <div className="space-y-3">
-                <div className="bg-soft/60 rounded-2xl p-4 border border-border/60 hover:border-purple/30 hover:bg-white transition-all duration-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3.5 min-w-0">
-                    <div className="w-11 h-11 rounded-xl bg-purple/10 text-purple flex items-center justify-center shrink-0">
-                      <FileText size={20} />
-                    </div>
-                    <div className="min-w-0">
-                      <h4 className="font-bold text-sm text-ink truncate">
-                        {gig.title.replace(/\s+/g, '_')}_Specification_Brief.pdf
-                      </h4>
-                      <p className="text-xs text-ink/50 mt-0.5 font-medium">
-                        PDF Document · 4.2 MB · Uploaded with brief
-                      </p>
-                    </div>
-                  </div>
+              {rawAttachments.length > 0 ? (
+                <div className="space-y-3">
+                  {rawAttachments.map((att, idx) => {
+                    const isImg =
+                      att.type?.startsWith('image/') ||
+                      att.url.startsWith('data:image') ||
+                      /\.(png|jpe?g|webp|gif|svg)(\?.*)?$/i.test(att.url);
+                    const isCode =
+                      att.type?.includes('code') ||
+                      /\.(js|ts|tsx|jsx|json|py|html|css)(\?.*)?$/i.test(att.name || att.url);
+                    const isPdf =
+                      att.type?.includes('pdf') ||
+                      /\.pdf(\?.*)?$/i.test(att.name || att.url);
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => toast.info('Opening document preview in modal')}
-                      className="btn-secondary !py-2 !px-3.5 !text-xs"
-                    >
-                      <Eye size={14} />
-                      <span>Preview</span>
-                    </button>
-                    <button
-                      onClick={() => toast.success('Downloading attachment...')}
-                      className="btn-secondary !py-2 !px-3.5 !text-xs"
-                    >
-                      <Download size={14} />
-                      <span>Download</span>
-                    </button>
-                  </div>
+                    return (
+                      <div
+                        key={idx}
+                        className="bg-soft/60 rounded-2xl p-4 border border-border/60 hover:border-purple/30 hover:bg-white transition-all duration-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          {isImg ? (
+                            <div className="w-12 h-12 rounded-xl bg-purple/10 border border-border/40 overflow-hidden flex items-center justify-center shrink-0">
+                              <img
+                                src={att.url}
+                                alt={att.name}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ) : (
+                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+                              isPdf
+                                ? 'bg-red-500/10 text-red-500'
+                                : isCode
+                                ? 'bg-sky-500/10 text-sky-600'
+                                : 'bg-purple/10 text-purple'
+                            }`}>
+                              {isPdf ? <FileText size={22} /> : isCode ? <Paperclip size={22} /> : <Paperclip size={22} />}
+                            </div>
+                          )}
+
+                          <div className="min-w-0 flex-1">
+                            <h4 className="font-bold text-sm text-ink truncate">
+                              {att.name}
+                            </h4>
+                            <div className="flex items-center gap-2 text-xs text-ink/50 mt-0.5 font-medium">
+                              {att.size ? <span>{formatFileSize(att.size)}</span> : null}
+                              {att.size && <span>·</span>}
+                              <span className="uppercase text-[10px] font-bold text-ink/40">
+                                {isImg ? 'Image Asset' : isPdf ? 'PDF Document' : isCode ? 'Code / Config' : 'Attachment Asset'}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                          <a
+                            href={att.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="btn-secondary !py-2 !px-3.5 !text-xs inline-flex items-center gap-1.5"
+                          >
+                            <Eye size={14} />
+                            <span>View</span>
+                          </a>
+                          <a
+                            href={att.url}
+                            download={att.name || `attachment-${idx + 1}`}
+                            className="btn-secondary !py-2 !px-3.5 !text-xs inline-flex items-center gap-1.5"
+                          >
+                            <Download size={14} />
+                            <span>Download</span>
+                          </a>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
+              ) : (
+                <div className="p-6 text-center rounded-2xl bg-soft/40 border border-dashed border-border/60">
+                  <p className="text-xs text-ink/50 font-medium">
+                    No supplemental assets or files attached to this brief.
+                  </p>
+                </div>
+              )}
             </section>
 
             {/* 5. CLIENT INFORMATION CARD */}
@@ -493,8 +539,20 @@ export default function GigDetail() {
 
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5">
                 <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-[20px] bg-[#22D3EE] font-clash font-bold text-xl text-ink flex items-center justify-center shadow-md ring-4 ring-white shrink-0">
-                    {clientInitials}
+                  <div
+                    onClick={() => gig.client?._id && navigate(`/profile/${gig.client._id}`)}
+                    className="w-16 h-16 rounded-[20px] font-clash font-bold text-xl text-ink flex items-center justify-center shadow-md ring-4 ring-white shrink-0 overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                    style={{ backgroundColor: gig.client?.avatarColor || '#22D3EE' }}
+                  >
+                    {gig.client?.avatar ? (
+                      <img
+                        src={gig.client.avatar}
+                        alt={clientName}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      clientInitials
+                    )}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
@@ -504,7 +562,7 @@ export default function GigDetail() {
                       <span className="w-2 h-2 rounded-full bg-emerald-500" title="Online now" />
                     </div>
                     <p className="text-xs text-ink/60 font-medium mt-1 flex items-center gap-2">
-                      <span>Member since 2024</span>
+                      <span>Platform Member</span>
                       <span>·</span>
                       <span className="text-emerald-700 font-semibold flex items-center gap-1">
                         <ShieldCheck size={13} />
@@ -515,9 +573,17 @@ export default function GigDetail() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {gig.client?._id && (
+                    <button
+                      onClick={() => navigate(`/profile/${gig.client._id}`)}
+                      className="btn-secondary !py-2.5 !px-4 !text-xs"
+                    >
+                      <span>View Profile</span>
+                    </button>
+                  )}
                   <button
                     onClick={handleMessageClient}
-                    className="btn-secondary !py-2.5 !px-4 !text-xs"
+                    className="btn-primary !py-2.5 !px-4 !text-xs"
                   >
                     <MessageSquare size={14} />
                     <span>Message Client</span>
@@ -529,27 +595,27 @@ export default function GigDetail() {
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
                 <div className="bg-soft/70 p-3.5 rounded-2xl border border-border/50">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 block mb-1">
-                    Rating
+                    Account Status
                   </span>
-                  <span className="font-display font-extrabold text-lg text-ink">4.9 ★</span>
+                  <span className="font-display font-extrabold text-sm sm:text-base text-emerald-700">Verified</span>
                 </div>
                 <div className="bg-soft/70 p-3.5 rounded-2xl border border-border/50">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 block mb-1">
-                    Gigs Posted
+                    Category Brief
                   </span>
-                  <span className="font-display font-extrabold text-lg text-ink">14 Gigs</span>
+                  <span className="font-display font-extrabold text-sm sm:text-base text-ink capitalize">{categoryLabel}</span>
                 </div>
                 <div className="bg-soft/70 p-3.5 rounded-2xl border border-border/50">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 block mb-1">
-                    Hire Rate
+                    Escrow Protection
                   </span>
-                  <span className="font-display font-extrabold text-lg text-emerald-700">96%</span>
+                  <span className="font-display font-extrabold text-sm sm:text-base text-emerald-700">100% Vaulted</span>
                 </div>
                 <div className="bg-soft/70 p-3.5 rounded-2xl border border-border/50">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 block mb-1">
-                    Total Spent
+                    Project Budget
                   </span>
-                  <span className="font-display font-extrabold text-lg text-purple">₹1.4L+</span>
+                  <span className="font-display font-extrabold text-sm sm:text-base text-purple">₹{Number(gig.budget || 0).toLocaleString('en-IN')}</span>
                 </div>
               </div>
             </section>
@@ -675,69 +741,65 @@ export default function GigDetail() {
             )}
 
             {/* 6. SIMILAR GIGS SECTION */}
-            <section className="space-y-5 pt-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="font-display text-xl sm:text-2xl font-bold text-ink tracking-tight">
-                    Similar Opportunities
-                  </h2>
-                  <p className="text-xs sm:text-sm text-ink/50 font-medium mt-0.5">
-                    Other active commissions in {categoryLabel}
-                  </p>
-                </div>
-                <Link
-                  to="/gigs"
-                  className="text-xs font-bold text-purple hover:underline no-underline inline-flex items-center gap-1"
-                >
-                  <span>Explore all</span>
-                  <ArrowUpRight size={14} />
-                </Link>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                {displayedSimilarGigs.map((simGig, idx) => (
-                  <div
-                    key={simGig._id || idx}
-                    onClick={() => {
-                      if (simGig._id.startsWith('sim-')) {
-                        navigate('/gigs');
-                      } else {
-                        navigate(`/gigs/${simGig._id}`);
-                      }
-                    }}
-                    className="bg-white rounded-[24px] p-5 border border-border/70 hover:border-purple/40 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-[0_8px_30px_rgba(124,58,237,0.08)] transition-all duration-200 cursor-pointer flex flex-col justify-between hover-lift group"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-purple bg-purple/10 px-2.5 py-1 rounded-full">
-                          {simGig.category || categoryLabel}
-                        </span>
-                        <ArrowUpRight
-                          size={16}
-                          className="text-ink/30 group-hover:text-purple group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
-                        />
-                      </div>
-
-                      <h4 className="font-bold text-sm text-ink group-hover:text-purple transition-colors line-clamp-2 leading-snug mb-2">
-                        {simGig.title}
-                      </h4>
-                    </div>
-
-                    <div className="pt-4 border-t border-border/50 flex items-center justify-between">
-                      <div>
-                        <span className="text-[10px] font-bold text-ink/40 uppercase tracking-wider block">Budget</span>
-                        <span className="font-display font-extrabold text-sm text-ink">
-                          ₹{(simGig.budget || 5000).toLocaleString('en-IN')}
-                        </span>
-                      </div>
-                      <span className="text-[11px] font-semibold text-ink/50">
-                        {simGig.postedDate || 'Active'}
-                      </span>
-                    </div>
+            {displayedSimilarGigs.length > 0 && (
+              <section className="space-y-5 pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="font-display text-xl sm:text-2xl font-bold text-ink tracking-tight">
+                      Similar Opportunities
+                    </h2>
+                    <p className="text-xs sm:text-sm text-ink/50 font-medium mt-0.5">
+                      Other active commissions in {categoryLabel}
+                    </p>
                   </div>
-                ))}
-              </div>
-            </section>
+                  <Link
+                    to="/gigs"
+                    className="text-xs font-bold text-purple hover:underline no-underline inline-flex items-center gap-1"
+                  >
+                    <span>Explore all</span>
+                    <ArrowUpRight size={14} />
+                  </Link>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {displayedSimilarGigs.map((simGig, idx) => (
+                    <div
+                      key={simGig._id || idx}
+                      onClick={() => navigate(`/gigs/${simGig._id}`)}
+                      className="bg-white rounded-[24px] p-5 border border-border/70 hover:border-purple/40 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-[0_8px_30px_rgba(124,58,237,0.08)] transition-all duration-200 cursor-pointer flex flex-col justify-between hover-lift group"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-purple bg-purple/10 px-2.5 py-1 rounded-full">
+                            {simGig.category || categoryLabel}
+                          </span>
+                          <ArrowUpRight
+                            size={16}
+                            className="text-ink/30 group-hover:text-purple group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
+                          />
+                        </div>
+
+                        <h4 className="font-bold text-sm text-ink group-hover:text-purple transition-colors line-clamp-2 leading-snug mb-2">
+                          {simGig.title}
+                        </h4>
+                      </div>
+
+                      <div className="pt-4 border-t border-border/50 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] font-bold text-ink/40 uppercase tracking-wider block">Budget</span>
+                          <span className="font-display font-extrabold text-sm text-ink">
+                            ₹{Number(simGig.budget || 0).toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                          Open
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
           </main>
 

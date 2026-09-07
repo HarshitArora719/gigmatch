@@ -16,4 +16,6 @@ const MessageSchema = new Schema<IMessage>({
   isRead: { type: Boolean, default: false },
 }, { timestamps: true });
 
+MessageSchema.index({ order: 1, createdAt: 1 });
+
 export default mongoose.model<IMessage>('Message', MessageSchema);

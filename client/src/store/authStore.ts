@@ -6,11 +6,14 @@ interface User {
   name: string;
   email: string;
   role: 'client' | 'freelancer';
+  avatar?: string;
+  avatarColor?: string;
 }
 
 interface AuthState {
   user: User | null;
   isLoading: boolean;
+  isInitialized: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string, role: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -23,6 +26,7 @@ interface AuthState {
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   isLoading: false,
+  isInitialized: false,
   isAuthModalOpen: false,
   authModalView: 'login',
 
@@ -42,29 +46,75 @@ export const useAuthStore = create<AuthState>((set) => ({
           name: u.name,
           email: u.email,
           role: u.role,
+          avatar: u.avatar || '',
+          avatarColor: u.avatarColor || '#22D3EE',
         },
+        isInitialized: true,
       });
-    } catch (error) {
-      set({ user: null });
+    } catch {
+      localStorage.removeItem('gm_token');
+      set({ user: null, isInitialized: true });
     }
   },
 
   login: async (email, password) => {
     set({ isLoading: true });
-    const res = await api.post('/api/auth/login', { email, password });
-    set({ user: res.data.data.user });
-    set({ isLoading: false });
+    try {
+      const res = await api.post('/api/auth/login', { email, password });
+      const { user, token } = res.data.data;
+      if (token) {
+        localStorage.setItem('gm_token', token);
+      }
+      set({
+        user: {
+          id: String(user.id ?? user._id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar: user.avatar || '',
+          avatarColor: user.avatarColor || '#22D3EE',
+        },
+        isLoading: false,
+      });
+    } catch (err) {
+      set({ isLoading: false });
+      throw err;
+    }
   },
 
   register: async (name, email, password, role) => {
     set({ isLoading: true });
-    const res = await api.post('/api/auth/register', { name, email, password, role });
-    set({ user: res.data.data.user });
-    set({ isLoading: false });
+    try {
+      const res = await api.post('/api/auth/register', { name, email, password, role });
+      const { user, token } = res.data.data;
+      if (token) {
+        localStorage.setItem('gm_token', token);
+      }
+      set({
+        user: {
+          id: String(user.id ?? user._id),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar: user.avatar || '',
+          avatarColor: user.avatarColor || '#22D3EE',
+        },
+        isLoading: false,
+      });
+    } catch (err) {
+      set({ isLoading: false });
+      throw err;
+    }
   },
 
   logout: async () => {
-    await api.post('/api/auth/logout');
-    set({ user: null });
+    try {
+      await api.post('/api/auth/logout');
+    } catch {
+      // Ignore network errors on logout
+    } finally {
+      localStorage.removeItem('gm_token');
+      set({ user: null });
+    }
   }
 }));

@@ -9,12 +9,21 @@ const formatMessage = (message: any) => ({
   _id: message._id,
   orderId: String(message.order?.toString?.() ?? message.order),
   senderId: String(message.sender?._id?.toString?.() ?? message.sender?.toString?.() ?? message.sender),
+  senderName: message.sender?.name || null,
   content: message.content,
   createdAt: message.createdAt,
 });
 
 export const sendMessage = asyncHandler(async (req: any, res: Response) => {
   const { orderId, content, receiverId } = req.body;
+
+  if (!orderId) {
+    return ApiResponse.error(res, 'Order ID is required', 400);
+  }
+
+  if (!content || typeof content !== 'string' || !content.trim()) {
+    return ApiResponse.error(res, 'Message content cannot be empty', 400);
+  }
 
   const order = await Order.findById(orderId);
   if (!order) {
@@ -38,12 +47,23 @@ export const sendMessage = asyncHandler(async (req: any, res: Response) => {
     order: orderId,
     sender: userId,
     receiver: receiverId || expectedReceiver,
-    content,
+    content: content.trim(),
   });
 
-  const payload = formatMessage(message);
+  // Populate sender name for the response
+  const populatedMessage = await Message.findById(message._id).populate('sender', 'name');
+  const payload = formatMessage(populatedMessage);
 
-  getIO().to(`order_${orderId}`).emit('receiveMessage', payload);
+  try {
+    const io = getIO();
+    if (io) {
+      io.to(`order_${orderId}`).emit('receiveMessage', payload);
+    }
+  } catch (socketErr) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('Socket broadcast failed:', socketErr);
+    }
+  }
 
   return ApiResponse.success(res, { message: payload }, 'Message sent', 201);
 });
@@ -65,6 +85,7 @@ export const getOrderMessages = asyncHandler(async (req: any, res: Response) => 
   }
 
   const messages = await Message.find({ order: orderId })
+    .populate('sender', 'name')
     .sort({ createdAt: 1 });
 
   return ApiResponse.success(res, {

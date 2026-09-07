@@ -6,6 +6,7 @@ export interface IUser extends Document {
   password: string;
   role: 'client' | 'freelancer';
   avatar?: string;
+  avatarColor?: string;
   isVerified: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -27,6 +28,7 @@ const UserSchema = new Schema<IUser>({
     required: true 
   },
   avatar: { type: String },
+  avatarColor: { type: String, default: '#22D3EE' },
   isVerified: { type: Boolean, default: false },
 }, { timestamps: true });
 

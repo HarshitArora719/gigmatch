@@ -27,20 +27,18 @@ export default function PaymentButton({
     return <span className="text-xs text-[var(--text-muted)]">Awaiting payment</span>;
   }
 
-  const handleMockPayment = async () => {
+  const handleProcessPayment = async () => {
     setLoading(true);
-    setTimeout(async () => {
-      try {
-        await api.post('/api/payments/verify', { orderId, milestoneIndex });
-        setPaid(true);
-        toast.success(`Payment of ₹${amount} successful!`);
-        onSuccess?.();
-      } catch {
-        toast.error('Payment failed. Please try again.');
-      } finally {
-        setLoading(false);
-      }
-    }, 1200);
+    try {
+      await api.post('/api/payments/verify', { orderId, milestoneIndex });
+      setPaid(true);
+      toast.success(`Payment of ₹${amount.toLocaleString('en-IN')} successful!`);
+      onSuccess?.();
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Payment failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (paid) {
@@ -52,9 +50,9 @@ export default function PaymentButton({
   }
 
   return (
-    <Button size="sm" onClick={handleMockPayment} disabled={loading}>
+    <Button size="sm" onClick={handleProcessPayment} disabled={loading}>
       <IndianRupee size={14} />
-      {loading ? 'Processing...' : `Pay ₹${amount}`}
+      {loading ? 'Processing...' : `Pay ₹${amount.toLocaleString('en-IN')}`}
     </Button>
   );
 }

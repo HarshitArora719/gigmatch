@@ -73,9 +73,11 @@ export default function Navbar() {
             const isActive =
               link.to === '/gigs'
                 ? location.pathname === '/gigs'
-                : link.to.startsWith('/#')
-                  ? location.pathname === '/'
-                  : location.pathname === link.to;
+                : link.to === '/dashboard'
+                  ? location.pathname.startsWith('/dashboard')
+                  : link.to.startsWith('/#')
+                    ? location.pathname === '/'
+                    : location.pathname === link.to;
             return (
               <Link
                 key={link.to}
@@ -89,22 +91,34 @@ export default function Navbar() {
         </div>
 
         {/* Right side — desktop */}
-        <div className="hidden lg:flex items-center gap-4">
+        <div className="hidden lg:flex items-center gap-3">
           {user ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <Link
                 to="/profile"
-                className="group relative inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-[0.9375rem] font-medium text-ink transition-all duration-300 hover:text-white hover:shadow-[0_4px_16px_rgba(124,58,237,0.25)]"
-                style={{ backgroundImage: 'linear-gradient(135deg, transparent, transparent)', backgroundSize: '100% 100%' }}
-                onMouseEnter={(e) => { e.currentTarget.style.backgroundImage = 'linear-gradient(135deg, #7C3AED 0%, #FF6B6B 100%)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.backgroundImage = 'linear-gradient(135deg, transparent, transparent)'; }}
+                className="group inline-flex items-center gap-2.5 pl-1.5 pr-4 py-1 rounded-full bg-white border border-border/80 text-[0.9375rem] font-semibold text-ink transition-all duration-200 hover:border-purple/40 hover:shadow-[0_4px_16px_rgba(124,58,237,0.12)] hover:-translate-y-0.5"
               >
-                <User size={15} className="text-muted-foreground group-hover:text-white transition-colors duration-300" />
-                {user.name?.split(' ')[0]}
+                <div
+                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center font-clash font-bold text-xs text-ink overflow-hidden ring-2 ring-white shadow-xs shrink-0 transition-transform group-hover:scale-105"
+                  style={{ backgroundColor: user.avatarColor || '#22D3EE' }}
+                >
+                  {user.avatar ? (
+                    <img
+                      src={user.avatar}
+                      alt={user.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    (user.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+                  )}
+                </div>
+                <span className="truncate max-w-[120px] group-hover:text-purple transition-colors">
+                  {user.name?.split(' ')[0]}
+                </span>
               </Link>
               <button
                 onClick={handleLogout}
-                className="inline-flex items-center justify-center h-9 w-9 rounded-full text-muted-foreground hover:text-coral hover:bg-coral/10 transition-colors cursor-pointer bg-transparent border-none"
+                className="inline-flex items-center justify-center h-9 w-9 rounded-full text-muted-foreground hover:text-coral hover:bg-coral/10 transition-colors cursor-pointer bg-transparent border border-transparent hover:border-coral/20"
                 title="Log out"
                 aria-label="Log out"
               >
@@ -165,11 +179,24 @@ export default function Navbar() {
               {user && (
                 <Link
                   to="/profile"
-                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-[0.9375rem] font-medium text-ink transition-all hover:bg-soft no-underline"
+                  className="flex items-center gap-3 rounded-xl px-4 py-3 text-[0.9375rem] font-semibold text-ink transition-all hover:bg-soft no-underline"
                   onClick={() => setMobileOpen(false)}
                 >
-                  <User size={16} />
-                  Profile
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center font-clash font-bold text-xs text-ink overflow-hidden ring-2 ring-white shadow-xs shrink-0"
+                    style={{ backgroundColor: user.avatarColor || '#22D3EE' }}
+                  >
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt={user.name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      (user.name || 'U').split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()
+                    )}
+                  </div>
+                  <span>{user.name}</span>
                 </Link>
               )}
 

@@ -42,7 +42,12 @@ export default function AuthModal() {
         await register(name, email, password, role);
       }
       setAuthModal(false);
-      navigate('/dashboard');
+      const currentUser = useAuthStore.getState().user;
+      if (currentUser?.role === 'client') {
+        navigate('/my-gigs');
+      } else {
+        navigate('/gigs');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || `${isLogin ? 'Login' : 'Registration'} failed`);
     } finally {

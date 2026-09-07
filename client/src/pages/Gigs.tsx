@@ -5,95 +5,8 @@ import { Search, ArrowUpRight, SlidersHorizontal, Briefcase } from 'lucide-react
 import { Button } from '../components/ui/button';
 
 /* ──────────────────────────────────────────────
-   SHOWCASE GIG DATA
+   CATEGORY DATA
    ────────────────────────────────────────────── */
-
-const showcaseGigs = [
-  {
-    _id: 'showcase-1',
-    bg: '#22D3EE',
-    bgLight: 'rgba(34,211,238,0.08)',
-    image: '',
-    category: 'Design & Creative',
-    filterCategory: 'graphic-design',
-    studio: 'Studio Morrow',
-    rating: 4.9,
-    reviews: 128,
-    title: 'Brand world builder for a culture magazine',
-    meta: '₹5,000–₹8,000 · Remote · 6 weeks',
-    startingPrice: 'From ₹5,000',
-  },
-  {
-    _id: 'showcase-2',
-    bg: '#FFB347',
-    bgLight: 'rgba(255,179,71,0.08)',
-    image: '',
-    category: 'Development & IT',
-    filterCategory: 'coding',
-    studio: 'Waveform Works',
-    rating: 5.0,
-    reviews: 87,
-    title: 'Front-end creator for an indie music platform',
-    meta: '₹6,000–₹10,000 · Remote · 8 weeks',
-    startingPrice: 'From ₹6,000',
-  },
-  {
-    _id: 'showcase-3',
-    bg: '#FF6B6B',
-    bgLight: 'rgba(255,107,107,0.08)',
-    image: '',
-    category: 'Writing & Translation',
-    filterCategory: 'content-writing',
-    studio: 'Field Notes',
-    rating: 4.8,
-    reviews: 64,
-    title: 'Editorial storyteller for a new travel journal',
-    meta: '₹3,500–₹5,000 · Remote · 4 weeks',
-    startingPrice: 'From ₹3,500',
-  },
-  {
-    _id: 'showcase-4',
-    bg: '#A3E635',
-    bgLight: 'rgba(163,230,53,0.08)',
-    image: '',
-    category: 'Video & Animation',
-    filterCategory: 'video-editing',
-    studio: 'Magnetic Tape',
-    rating: 4.9,
-    reviews: 93,
-    title: 'Motion identity & 3D title suite for an indie docuseries',
-    meta: '₹4,500–₹7,000 · Remote · 4 weeks',
-    startingPrice: 'From ₹4,500',
-  },
-  {
-    _id: 'showcase-5',
-    bg: '#D8B4FE',
-    bgLight: 'rgba(216,180,254,0.08)',
-    image: '',
-    category: 'Tutoring & Teaching',
-    filterCategory: 'tutoring',
-    studio: 'Academia Pro',
-    rating: 5.0,
-    reviews: 41,
-    title: 'Advanced Full-Stack TypeScript & React Architecture Mentorship',
-    meta: '₹2,500–₹5,000 · Online · 4 weeks',
-    startingPrice: 'From ₹2,500',
-  },
-  {
-    _id: 'showcase-6',
-    bg: '#F9A8D4',
-    bgLight: 'rgba(249,168,212,0.08)',
-    image: '',
-    category: 'Other Services',
-    filterCategory: 'others',
-    studio: 'Good Company',
-    rating: 4.9,
-    reviews: 71,
-    title: 'Comprehensive Product Strategy & Go-To-Market Blueprint',
-    meta: '₹4,000–₹6,500 · Hybrid · 5 weeks',
-    startingPrice: 'From ₹4,000',
-  },
-];
 
 const categoryChips = [
   { value: '', label: 'All gigs' },
@@ -105,6 +18,15 @@ const categoryChips = [
   { value: 'others', label: 'Other Services' },
 ];
 
+const categoryLabels: Record<string, string> = {
+  'coding': 'Development & IT',
+  'graphic-design': 'Design & Creative',
+  'video-editing': 'Video & Animation',
+  'content-writing': 'Writing & Translation',
+  'tutoring': 'Tutoring & Teaching',
+  'others': 'Other Services',
+};
+
 /* ──────────────────────────────────────────────
    GIG CARD COMPONENT
    ────────────────────────────────────────────── */
@@ -114,9 +36,7 @@ interface GigCardProps {
   bgLight: string;
   image?: string;
   category: string;
-  studio: string;
-  rating: number;
-  reviews: number;
+  clientName: string;
   title: string;
   meta: string;
   startingPrice: string;
@@ -128,9 +48,7 @@ function GigCard({
   bgLight,
   image,
   category,
-  studio,
-  rating,
-  reviews,
+  clientName,
   title,
   meta,
   startingPrice,
@@ -192,11 +110,11 @@ function GigCard({
 
       {/* Content */}
       <div className="flex flex-col flex-1 px-5 pt-4 pb-5">
-        {/* Studio + Rating */}
+        {/* Client identity */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[13px] font-semibold text-ink">{studio}</span>
-          <span className="text-[12px] font-medium text-ink/45">
-            ★ {rating} ({reviews})
+          <span className="text-[13px] font-semibold text-ink">{clientName}</span>
+          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/40">
+            Verified Brief
           </span>
         </div>
 
@@ -206,7 +124,7 @@ function GigCard({
         </h3>
 
         {/* Meta */}
-        <p className="text-[12px] font-medium text-ink/45 mb-0">{meta}</p>
+        <p className="text-[12px] font-medium text-ink/50 mb-0">{meta}</p>
 
         {/* CTA */}
         <div className="mt-auto pt-4">
@@ -246,8 +164,7 @@ export default function Gigs() {
 
   // Fetch API gigs
   useEffect(() => {
-    const t = setTimeout(() => fetchGigs(), 300);
-    return () => clearTimeout(t);
+    fetchGigs();
   }, []);
 
   const fetchGigs = async () => {
@@ -256,25 +173,11 @@ export default function Gigs() {
       const res = await api.get('/api/gigs');
       setApiGigs(res.data.data.gigs || []);
     } catch (e) {
-      console.error(e);
+      console.error('Failed to fetch gigs:', e);
     } finally {
       setLoading(false);
     }
   };
-
-  // Filter showcase gigs
-  const filteredShowcase = useMemo(() => {
-    return showcaseGigs.filter((gig) => {
-      const matchesCategory = !activeCategory || gig.filterCategory === activeCategory;
-      const query = searchTerm.toLowerCase();
-      const matchesSearch =
-        !query ||
-        gig.title.toLowerCase().includes(query) ||
-        gig.category.toLowerCase().includes(query) ||
-        gig.studio.toLowerCase().includes(query);
-      return matchesCategory && matchesSearch;
-    });
-  }, [activeCategory, searchTerm]);
 
   // Filter API gigs
   const filteredApi = useMemo(() => {
@@ -284,7 +187,8 @@ export default function Gigs() {
         !query ||
         gig.title?.toLowerCase().includes(query) ||
         gig.category?.toLowerCase().includes(query) ||
-        gig.description?.toLowerCase().includes(query);
+        gig.description?.toLowerCase().includes(query) ||
+        (gig.tags && gig.tags.some((t: string) => t.toLowerCase().includes(query)));
 
       const gigCat = (gig.category || '').toLowerCase();
       const matchesCategory =
@@ -302,7 +206,7 @@ export default function Gigs() {
     });
   }, [apiGigs, activeCategory, searchTerm]);
 
-  const totalCount = filteredShowcase.length + filteredApi.length;
+  const totalCount = filteredApi.length;
 
   const apiGigColors = ['#22D3EE', '#FFB347', '#FF6B6B', '#A3E635', '#D8B4FE', '#F9A8D4'];
   const apiGigLights = [
@@ -332,7 +236,7 @@ export default function Gigs() {
               </h1>
             </div>
             <span className="text-xs font-bold uppercase tracking-[0.12em] text-ink/50 shrink-0">
-              {loading ? '...' : `${totalCount} OPEN GIGS`}
+              {loading ? '...' : `${totalCount} OPEN GIG${totalCount !== 1 ? 'S' : ''}`}
             </span>
           </div>
 
@@ -357,7 +261,7 @@ export default function Gigs() {
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setSearchFocused(false)}
-                placeholder="Search by role, skill, studio, or style…"
+                placeholder="Search by role, skill, title, or category…"
                 className="w-full h-12 md:h-[52px] pl-11 pr-4 rounded-full border-none text-[0.9375rem] font-medium outline-none text-ink bg-transparent placeholder:text-ink/30"
                 aria-label="Search gigs"
               />
@@ -392,10 +296,10 @@ export default function Gigs() {
           {/* Results header */}
           <div className="flex items-center justify-between mb-6">
             <h2 className="font-display font-bold text-ink text-xl md:text-2xl tracking-[-0.01em]">
-              Recommended gigs
+              Available Opportunities
             </h2>
             <button className="text-sm font-semibold text-purple hover:text-purple/70 transition-colors cursor-pointer bg-transparent border-none">
-              Sort: Best match
+              Sort: Newest first
             </button>
           </div>
         </div>
@@ -406,7 +310,7 @@ export default function Gigs() {
           ════════════════════════════════════════ */}
       <section className="pb-16 md:pb-24">
         <div className="container-app">
-          {filteredShowcase.length === 0 && filteredApi.length === 0 && !loading ? (
+          {filteredApi.length === 0 && !loading ? (
             <div className="py-20 text-center border border-dashed border-ink/15 rounded-[24px] bg-white">
               <div className="mx-auto h-14 w-14 rounded-full bg-soft flex items-center justify-center mb-4 text-ink/40">
                 <Briefcase size={22} />
@@ -425,46 +329,32 @@ export default function Gigs() {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-              {filteredShowcase.map((gig) => (
-                <GigCard
-                  key={gig._id}
-                  bg={gig.bg}
-                  bgLight={gig.bgLight}
-                  image={gig.image || ''}
-                  category={gig.category}
-                  studio={gig.studio}
-                  rating={gig.rating}
-                  reviews={gig.reviews}
-                  title={gig.title}
-                  meta={gig.meta}
-                  startingPrice={gig.startingPrice}
-                  onClick={() => navigate(`/gigs/${gig._id}`)}
-                />
-              ))}
+              {filteredApi.map((gig, i) => {
+                const categoryLabel = categoryLabels[gig.category] || gig.category?.replace('-', ' ') || 'General';
+                const client = gig.client?.name || 'Verified Client';
+                const budgetNum = Number(gig.budget || 0);
 
-              {filteredApi.map((gig, i) => (
-                <GigCard
-                  key={gig._id}
-                  bg={apiGigColors[i % apiGigColors.length]}
-                  bgLight={apiGigLights[i % apiGigLights.length]}
-                  image={gig.image || ''}
-                  category={gig.category?.replace('-', ' ') || 'Gig'}
-                  studio={gig.postedBy?.name || 'Unknown Studio'}
-                  rating={4.8 + (i % 3) * 0.1}
-                  reviews={Math.floor(40 + Math.random() * 100)}
-                  title={gig.title}
-                  meta={`$${gig.budget?.toLocaleString() || '0'} · Remote`}
-                  startingPrice={`From $${gig.budget?.toLocaleString() || '0'}`}
-                  onClick={() => navigate(`/gigs/${gig._id}`)}
-                />
-              ))}
+                return (
+                  <GigCard
+                    key={gig._id}
+                    bg={apiGigColors[i % apiGigColors.length]}
+                    bgLight={apiGigLights[i % apiGigLights.length]}
+                    image={gig.images?.[0] || ''}
+                    category={categoryLabel}
+                    clientName={client}
+                    title={gig.title}
+                    meta={`₹${budgetNum.toLocaleString('en-IN')} · Remote · ${gig.proposalsCount || 0} proposals`}
+                    startingPrice={`₹${budgetNum.toLocaleString('en-IN')}`}
+                    onClick={() => navigate(`/gigs/${gig._id}`)}
+                  />
+                );
+              })}
 
               {loading &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <div
                     key={`skeleton-${i}`}
-                    className="rounded-[24px] bg-soft animate-pulse"
-                    style={{ minHeight: '360px' }}
+                    className="rounded-[24px] bg-soft animate-pulse min-h-[360px]"
                   />
                 ))}
             </div>

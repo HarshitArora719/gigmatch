@@ -7,6 +7,8 @@ export interface IReview extends Document {
   rating: number;                     // 1 to 5
   comment: string;
   role: 'client' | 'freelancer';      // reviewer role
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const ReviewSchema = new Schema<IReview>({
@@ -17,5 +19,8 @@ const ReviewSchema = new Schema<IReview>({
   comment: { type: String, maxlength: 500 },
   role: { type: String, enum: ['client', 'freelancer'], required: true },
 }, { timestamps: true });
+
+ReviewSchema.index({ to: 1, createdAt: -1 });
+ReviewSchema.index({ order: 1, from: 1 });
 
 export default mongoose.model<IReview>('Review', ReviewSchema);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import api from '../lib/axios';
@@ -44,6 +44,39 @@ export default function PostGig() {
   const [additionalTags, setAdditionalTags] = useState('');
   const [attachments, setAttachments] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [hasDraft, setHasDraft] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const draftLoadedRef = useRef(false);
+
+  // Restore draft from localStorage on mount (runs exactly once)
+  useEffect(() => {
+    if (draftLoadedRef.current) return;
+    try {
+      const raw = localStorage.getItem('gigmatch_post_gig_draft');
+      if (raw) {
+        draftLoadedRef.current = true;
+        const parsed = JSON.parse(raw);
+        if (parsed.formData) {
+          setFormData(parsed.formData);
+        }
+        if (parsed.experienceLevel) {
+          setExperienceLevel(parsed.experienceLevel);
+        }
+        if (parsed.additionalTags) {
+          setAdditionalTags(parsed.additionalTags);
+        }
+        if (parsed.savedAt) {
+          setDraftSavedAt(parsed.savedAt);
+        }
+        setHasDraft(true);
+        toast.info('Loaded your saved project draft from browser storage.', {
+          id: 'loaded-draft-toast',
+        });
+      }
+    } catch (e) {
+      console.error('Failed to load draft from localStorage:', e);
+    }
+  }, []);
 
   // Today's date in YYYY-MM-DD for deadline min attribute
   const todayStr = new Date().toISOString().split('T')[0];
@@ -120,28 +153,100 @@ export default function PostGig() {
       return;
     }
 
-    // 8. Validate Compulsory Attachment
-    if (attachments.length === 0) {
-      toast.error('At least one attachment (brief, reference, or sample) is required');
-      return;
-    }
-
     setLoading(true);
 
     try {
+      // Convert uploaded file attachments to DataURI objects
+      const processedAttachments = await Promise.all(
+        attachments.map(async (file) => {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          return {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            url: dataUrl,
+          };
+        })
+      );
+
+      const imageList = processedAttachments
+        .filter((att) => att.type.startsWith('image/'))
+        .map((att) => att.url);
+
       await api.post('/api/gigs', {
         ...formData,
         budget: numericBudget,
         tags: tagsArray,
         experienceLevel,
+        attachments: processedAttachments,
+        images: imageList,
       });
+      localStorage.removeItem('gigmatch_post_gig_draft');
       toast.success('Gig posted successfully!');
-      navigate('/dashboard');
+      navigate('/dashboard?tab=Projects');
     } catch {
       toast.error('Failed to post gig. Please try again.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSaveDraft = () => {
+    const hasAnyContent =
+      formData.title.trim() ||
+      formData.description.trim() ||
+      formData.category ||
+      formData.budget ||
+      formData.deadline ||
+      formData.tags ||
+      experienceLevel ||
+      additionalTags;
+
+    if (!hasAnyContent) {
+      toast.error('Cannot save an empty draft. Please fill in some project details first.');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    try {
+      localStorage.setItem(
+        'gigmatch_post_gig_draft',
+        JSON.stringify({
+          formData,
+          experienceLevel,
+          additionalTags,
+          savedAt: now,
+        })
+      );
+      setHasDraft(true);
+      setDraftSavedAt(now);
+      toast.success('Draft saved in browser storage! You can leave and resume anytime.');
+    } catch (e) {
+      console.error('Failed to save draft to localStorage:', e);
+      toast.error('Could not save draft locally.');
+    }
+  };
+
+  const handleDiscardDraft = () => {
+    localStorage.removeItem('gigmatch_post_gig_draft');
+    setFormData({
+      title: '',
+      description: '',
+      category: '',
+      budget: '',
+      deadline: '',
+      tags: '',
+    });
+    setExperienceLevel('');
+    setAdditionalTags('');
+    setHasDraft(false);
+    setDraftSavedAt(null);
+    toast.info('Draft discarded.');
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -241,6 +346,42 @@ export default function PostGig() {
       <section className="pb-20 md:pb-28">
         <div className="container-app max-w-[1100px] mx-auto">
           <form onSubmit={handleSubmit}>
+
+            {/* ── DRAFT BANNER ── */}
+            {hasDraft && (
+              <div className="mb-6 p-4.5 rounded-2xl bg-purple/5 border border-purple/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-xl bg-purple/15 text-purple flex items-center justify-center shrink-0">
+                    <Sparkles size={16} />
+                  </div>
+                  <div>
+                    <span className="font-bold text-xs text-ink block">
+                      Resumed from your saved local draft
+                    </span>
+                    <span className="text-[11px] text-ink/50">
+                      {draftSavedAt ? `Last saved on ${new Date(draftSavedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} at ${new Date(draftSavedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · ` : ''}
+                      Data is stored securely in your browser's local storage.
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={handleSaveDraft}
+                    className="btn-secondary !py-1.5 !px-3.5 !text-xs cursor-pointer"
+                  >
+                    Save Changes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDiscardDraft}
+                    className="text-xs font-bold text-coral hover:underline px-2.5 py-1 cursor-pointer bg-transparent border-0"
+                  >
+                    Discard Draft
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* ── TWO-COLUMN ROW: Basic Info (left) | Budget + Skills (right) ── */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-7 items-start">
@@ -638,7 +779,7 @@ export default function PostGig() {
                 {/* Save Draft */}
                 <button
                   type="button"
-                  onClick={() => toast.info('Draft saved locally')}
+                  onClick={handleSaveDraft}
                   className="inline-flex items-center justify-center gap-2 px-7 py-3 rounded-full bg-white text-ink/70 font-semibold text-[0.9375rem] border-1.5 border-border cursor-pointer transition-all duration-200 hover:text-purple hover:border-purple/30 hover:shadow-[0_4px_16px_rgba(124,58,237,0.08)] active:scale-[0.98] order-2"
                 >
                   Save Draft
