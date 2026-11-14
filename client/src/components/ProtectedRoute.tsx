@@ -18,12 +18,18 @@ export default function ProtectedRoute({
   const { user, isInitialized, setAuthModal } = useAuthStore();
   const location = useLocation();
 
+  const isRoleRestricted = Boolean(user && allowedRoles && !allowedRoles.includes(user.role));
+
   useEffect(() => {
     if (isInitialized && !user) {
       setAuthModal(true, 'login');
-      toast.info('Please sign in to access this page');
+      toast.info('Please sign in to access this page', { id: 'auth-required' });
+    } else if (isRoleRestricted) {
+      toast.error(`Access restricted: This area is only available to ${allowedRoles?.join(' or ')}s.`, {
+        id: 'access-restricted',
+      });
     }
-  }, [isInitialized, user, setAuthModal]);
+  }, [isInitialized, user, isRoleRestricted, allowedRoles, setAuthModal]);
 
   // If still checking authentication on initial load, show skeleton
   if (!isInitialized) {
@@ -48,8 +54,7 @@ export default function ProtectedRoute({
   }
 
   // Role restriction check
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
-    toast.error(`Access restricted: This area is only available to ${allowedRoles.join(' or ')}s.`);
+  if (isRoleRestricted) {
     const fallbackPath = user.role === 'client' ? '/dashboard' : '/gigs';
     return <Navigate to={fallbackPath} replace />;
   }

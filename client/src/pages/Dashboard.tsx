@@ -1,8 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
+import { useChatStore } from '../store/chatStore';
 import api from '../lib/axios';
 import { useDashboardData } from '../hooks/useDashboardData';
+import WorkspaceView from './Workspace';
+import { openRazorpayModal } from '../lib/razorpay';
+import DemoPaymentModal from '../components/DemoPaymentModal';
 import {
   Sparkles,
   Search,
@@ -42,7 +46,9 @@ import {
   Loader2,
   RefreshCw,
   Package,
-  Trash2
+  Trash2,
+  Paperclip,
+  Image as ImageIcon
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -53,18 +59,50 @@ import {
   DialogDescription,
 } from '../components/ui/dialog';
 
+const avatarColors = ['#A3E635', '#22D3EE', '#D8B4FE', '#F9A8D4', '#FFB347', '#FF6B6B', '#34D399', '#818CF8'];
+const getAvatarBg = (index: number) => avatarColors[index % avatarColors.length];
+
 export default function Dashboard() {
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const isFreelancer = user?.role === 'freelancer';
 
   // Navigation and UI state
   const tabFromUrl = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState(tabFromUrl || 'Dashboard');
+  const [activeTab, setActiveTab] = useState(
+    isFreelancer && tabFromUrl === 'Projects' ? 'Dashboard' : (tabFromUrl || 'Dashboard')
+  );
+
+  // Sync activeTab whenever URL searchParams change (with case-insensitivity)
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (!tabParam) {
+      if (activeTab !== 'Dashboard') {
+        setActiveTab('Dashboard');
+      }
+      return;
+    }
+    const canonicalTab = ['Dashboard', 'Workspace', 'Proposals', 'Orders', 'Messages', 'Payments', 'Reviews & History', 'Projects'].find(
+      t => t.toLowerCase() === tabParam.toLowerCase()
+    );
+    if (canonicalTab && canonicalTab !== activeTab) {
+      if (isFreelancer && canonicalTab === 'Projects') {
+        setActiveTab('Dashboard');
+      } else {
+        setActiveTab(canonicalTab);
+      }
+    }
+  }, [searchParams, isFreelancer, activeTab]);
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
+  const activeTabRef = useRef(activeTab);
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+  const selectedInboxThreadRef = useRef<any>(null);
 
   // Click outside to close notifications dropdown
   useEffect(() => {
@@ -89,7 +127,7 @@ export default function Dashboard() {
   const [gigSearch, setGigSearch] = useState('');
   const [proposalFilter, setProposalFilter] = useState<'All' | 'pending' | 'accepted' | 'rejected'>('All');
   const [proposalSearch, setProposalSearch] = useState('');
-  const [orderFilter, setOrderFilter] = useState<'All' | 'active' | 'in_review' | 'completed' | 'cancelled'>('All');
+  const [orderFilter, setOrderFilter] = useState<'All' | 'active' | 'delivered' | 'revision_requested' | 'in_review' | 'completed' | 'cancelled'>('All');
   const [orderSearch, setOrderSearch] = useState('');
 
   // Edit Gig modal state
@@ -101,24 +139,394 @@ export default function Dashboard() {
   const [editGigStatus, setEditGigStatus] = useState('open');
   const [savingGig, setSavingGig] = useState(false);
 
-  useEffect(() => {
-    if (tabFromUrl && tabFromUrl !== activeTab) {
-      setActiveTab(tabFromUrl);
-    }
-  }, [tabFromUrl]);
 
-  const handleTabClick = (tabName: string) => {
-    setActiveTab(tabName);
-    setSearchParams({ tab: tabName });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // Socket.IO & Real-time Messaging Integration
+  const { connectSocket, socket, joinConversation, leaveConversation, emitTyping, emitStopTyping, isUserOnline, isUserTyping } = useChatStore();
+  const currentUserId = (user as any)?._id || (user as any)?.id;
+
+  useEffect(() => {
+    if (currentUserId) {
+      connectSocket(currentUserId);
+    }
+  }, [currentUserId, connectSocket]);
+
+  // Database Conversations State
+  const [dbConversations, setDbConversations] = useState<any[]>([]);
+  const [loadingConversations, setLoadingConversations] = useState(false);
+
+  const fetchConversations = useCallback(async () => {
+    try {
+      setLoadingConversations(true);
+      const res = await api.get('/api/messages/conversations');
+      setDbConversations(res.data.data.conversations || []);
+    } catch (err) {
+      console.error('Failed to fetch conversations:', err);
+    } finally {
+      setLoadingConversations(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConversations();
+  }, [fetchConversations]);
+
+  // Notifications State
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      setLoadingNotifications(true);
+      const res = await api.get('/api/notifications');
+      setNotifications(res.data.data.notifications || []);
+      setUnreadNotificationCount(res.data.data.unreadCount || 0);
+    } catch (err) {
+      console.error('Failed to fetch notifications:', err);
+    } finally {
+      setLoadingNotifications(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  // Socket.IO Real-Time Listeners
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleNewMessage = (msg: any) => {
+      console.log('Message received');
+
+      const myId = String((user as any)?.id || (user as any)?._id || '');
+      const msgSenderId = String(msg.senderId);
+      const isFromMe = msgSenderId === myId;
+
+      const formattedMsg = {
+        id: msg._id,
+        sender: isFromMe ? ('me' as const) : ('them' as const),
+        text: msg.content,
+        messageType: msg.messageType || 'text',
+        attachments: msg.attachments || [],
+        time: new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      // Always save to chatConversations state under multiple possible lookup keys
+      setChatConversations(prev => {
+        const keysToUpdate = [
+          msg.conversationId,
+          `thread-${msg.conversationId}`,
+          `thread-${msg.senderId}`,
+          `thread-${msg.receiverId}`,
+        ].filter(Boolean);
+
+        const next = { ...prev };
+        keysToUpdate.forEach(k => {
+          const existing = next[k] || [];
+
+          // Skip if message with this exact ID already exists
+          if (existing.some((m: any) => m.id === msg._id)) {
+            return;
+          }
+
+          // If incoming message is from me, replace any matching pending optimistic message
+          if (isFromMe) {
+            const tempIdx = existing.findIndex((m: any) =>
+              String(m.id).startsWith('temp-') && (m.text === msg.content || m.text === formattedMsg.text)
+            );
+            if (tempIdx !== -1) {
+              const updated = [...existing];
+              updated[tempIdx] = formattedMsg;
+              next[k] = updated;
+              return;
+            }
+          }
+
+          next[k] = [...existing, formattedMsg];
+        });
+        return next;
+      });
+
+      // If active conversation matches, mark read on server immediately
+      setSelectedInboxThread((currentThread: any) => {
+        const isCurrent = currentThread && (
+          String(currentThread.conversationId) === String(msg.conversationId) ||
+          currentThread.id === `thread-${msg.conversationId}` ||
+          String(currentThread.participantId) === String(msg.senderId)
+        );
+
+        if (isCurrent) {
+          api.patch(`/api/messages/conversation/${msg.conversationId}/read`).catch(console.error);
+        }
+        return currentThread;
+      });
+
+      // Update conversations list in real-time
+      fetchConversations();
+    };
+
+    const handleNewNotification = (notif: any) => {
+      console.log('Notification received:', notif);
+
+      const nConvId = String(notif.conversationId?._id || notif.conversationId || '');
+      const nSenderId = String(notif.senderId?._id || notif.senderId || '');
+
+      // Check if user is currently looking at this conversation in the Messages tab
+      const currentThread = selectedInboxThreadRef.current;
+      const isCurrentlyViewing = activeTabRef.current === 'Messages' && currentThread && (
+        (nConvId && (String(currentThread.conversationId) === nConvId || currentThread.id === `thread-${nConvId}`)) ||
+        (nSenderId && String(currentThread.participantId) === nSenderId)
+      );
+
+      if (isCurrentlyViewing) {
+        // Already seen! Mark as read immediately, do not increment unread badge, no toast interruption
+        const readNotif = { ...notif, read: true };
+        setNotifications(prev => [readNotif, ...prev]);
+        if (notif._id) {
+          api.patch(`/api/notifications/${notif._id}/read`).catch(() => {});
+        }
+        if (nConvId) {
+          api.patch(`/api/notifications/conversation/${nConvId}/read`).catch(() => {});
+          api.patch(`/api/messages/conversation/${nConvId}/read`).catch(() => {});
+        }
+        return;
+      }
+
+      setNotifications(prev => [notif, ...prev]);
+      setUnreadNotificationCount(prev => prev + 1);
+      let notifMsg = notif.message || notif.description || '';
+      if (notifMsg.startsWith('Someone:')) {
+        const sName = notif.senderName || notif.senderId?.name || 'User';
+        notifMsg = notifMsg.replace(/^Someone:/, `${sName}:`);
+      }
+      toast.info(`${notif.title}: ${notifMsg}`);
+    };
+
+    const handleMessagesRead = ({ conversationId }: { conversationId: string }) => {
+      console.log('Messages read:', conversationId);
+    };
+
+    socket.on('newMessage', handleNewMessage);
+    socket.on('newNotification', handleNewNotification);
+    socket.on('messagesRead', handleMessagesRead);
+
+    return () => {
+      socket.off('newMessage', handleNewMessage);
+      socket.off('newNotification', handleNewNotification);
+      socket.off('messagesRead', handleMessagesRead);
+    };
+  }, [socket, fetchConversations, user]);
+
+  // Helper: clear unread notifications for a conversation
+  const clearNotificationsForConversation = useCallback((convId?: string, participantId?: string) => {
+    if (!convId && !participantId) return;
+
+    setNotifications(prev => {
+      let countCleared = 0;
+      const next = prev.map(n => {
+        const nConvId = String(n.conversationId?._id || n.conversationId || '');
+        const nSenderId = String(n.senderId?._id || n.senderId || '');
+
+        const matchesConv = convId && nConvId === String(convId);
+        const matchesSender = participantId && nSenderId === String(participantId);
+
+        if ((matchesConv || matchesSender) && n.read === false) {
+          countCleared++;
+          return { ...n, read: true };
+        }
+        return n;
+      });
+
+      if (countCleared > 0) {
+        setUnreadNotificationCount(curr => Math.max(0, curr - countCleared));
+      }
+      return next;
+    });
+
+    // Notify backend
+    if (convId) {
+      api.patch(`/api/notifications/conversation/${convId}/read`).catch(() => {});
+      api.patch(`/api/messages/conversation/${convId}/read`).catch(() => {});
+    }
+  }, []);
+
+  // Select a conversation and load persisted message history from MongoDB
+  const handleSelectConversation = async (thread: any) => {
+    // Leave previous conversation room
+    if (previousConvIdRef.current) {
+      leaveConversation(previousConvIdRef.current);
+    }
+
+    setSelectedInboxThread(thread);
+
+    let convId = thread.conversationId;
+    const threadKey = thread.id;
+
+    // Clear notifications for this conversation immediately
+    clearNotificationsForConversation(convId, thread.participantId);
+
+    if (!convId && thread.participantId) {
+      try {
+        const res = await api.post('/api/messages/conversation/get-or-create', {
+          targetUserId: thread.participantId,
+        });
+        convId = res.data.data.conversation._id;
+        setSelectedInboxThread((prev: any) => ({
+          ...prev,
+          conversationId: convId,
+          id: `thread-${convId}`,
+        }));
+        clearNotificationsForConversation(convId, thread.participantId);
+      } catch (err) {
+        console.error('Failed to create conversation for thread:', err);
+      }
+    }
+
+    // Join new conversation room
+    if (convId) {
+      joinConversation(convId);
+      previousConvIdRef.current = convId;
+
+      try {
+        const msgRes = await api.get(`/api/messages/conversation/${convId}`);
+        const msgs = msgRes.data.data.messages || [];
+        const myId = String((user as any)?.id || (user as any)?._id || '');
+        const formatted = msgs.map((m: any) => ({
+          id: m._id,
+          sender: (String(m.senderId) === myId || String(m.senderId?._id) === myId) ? ('me' as const) : ('them' as const),
+          text: m.content,
+          messageType: m.messageType || 'text',
+          attachments: m.attachments || [],
+          time: new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        }));
+
+        setChatConversations(prev => ({
+          ...prev,
+          [threadKey]: formatted,
+          [convId]: formatted,
+          [`thread-${convId}`]: formatted,
+        }));
+
+        // Always mark conversation and notifications read
+        api.patch(`/api/messages/conversation/${convId}/read`).catch(() => {});
+        api.patch(`/api/notifications/conversation/${convId}/read`).catch(() => {});
+        setDbConversations(prev =>
+          prev.map(c => c._id === convId ? { ...c, unreadCount: 0 } : c)
+        );
+        clearNotificationsForConversation(convId, thread.participantId);
+      } catch (err) {
+        console.error('Failed to fetch conversation messages:', err);
+      }
+    }
   };
+
+  // Handle chatWith query param (from GigDetail "Message Client" button)
+  useEffect(() => {
+    const chatWithId = searchParams.get('chatWith');
+    const chatName = searchParams.get('chatName');
+    const chatAvatar = searchParams.get('chatAvatar');
+    const chatAvatarColor = searchParams.get('chatAvatarColor');
+    const gigTitle = searchParams.get('gigTitle');
+    if (chatWithId && chatName) {
+      const decodedName = decodeURIComponent(chatName);
+      const decodedGigTitle = gigTitle ? decodeURIComponent(gigTitle) : undefined;
+      const threadId = `thread-${chatWithId}`;
+      const initials = decodedName
+        .split(' ')
+        .filter(Boolean)
+        .map((n: string) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase() || 'U';
+
+      const baseThread = {
+        id: threadId,
+        participantId: chatWithId,
+        name: decodedName,
+        role: 'Employer',
+        avatarBg: chatAvatarColor ? decodeURIComponent(chatAvatarColor) : '#22D3EE',
+        avatar: chatAvatar ? decodeURIComponent(chatAvatar) : null,
+        initials,
+        lastMessage: '',
+        time: 'Just now',
+        unread: 0,
+        online: true,
+      };
+
+      setSelectedInboxThread(baseThread);
+      setActiveTab('Messages');
+      setSearchParams({ tab: 'Messages' });
+
+      // Automatically find or create single shared conversation in MongoDB
+      (async () => {
+        try {
+          const res = await api.post('/api/messages/conversation/get-or-create', {
+            targetUserId: chatWithId,
+            gigTitle: decodedGigTitle,
+            sendWelcome: true,
+          });
+          const conv = res.data.data.conversation;
+          const convId = conv._id;
+
+          // Join conversation room for real-time
+          joinConversation(convId);
+          previousConvIdRef.current = convId;
+
+          setSelectedInboxThread((prev: any) => ({
+            ...prev,
+            conversationId: convId,
+            id: `thread-${convId}`,
+          }));
+
+          const msgRes = await api.get(`/api/messages/conversation/${convId}`);
+          const msgs = msgRes.data.data.messages || [];
+          const myId = (user as any)?._id || (user as any)?.id;
+          setChatConversations(prev => ({
+            ...prev,
+            [`thread-${convId}`]: msgs.map((m: any) => ({
+              id: m._id,
+              sender: (m.senderId === myId || m.senderId?._id === myId) ? 'me' : 'them',
+              text: m.content,
+              messageType: m.messageType || 'text',
+              attachments: m.attachments || [],
+              time: new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            })),
+          }));
+
+          fetchConversations();
+        } catch (err) {
+          console.error('Failed to get/create conversation via chatWith:', err);
+        }
+      })();
+    }
+  }, [searchParams.get('chatWith')]);
+
+  // ========================================
+  // REAL BACKEND DATA via useDashboardData
+  const dashboardData = useDashboardData(user);
+
+  // Sync proposal updates live via Socket.IO
+  useEffect(() => {
+    if (!socket) return;
+    const handleProposalsUpdate = () => {
+      dashboardData.refetch();
+    };
+    socket.on('gigProposalsUpdated', handleProposalsUpdate);
+    return () => {
+      socket.off('gigProposalsUpdated', handleProposalsUpdate);
+    };
+  }, [socket, dashboardData.refetch]);
 
   // Modals state
   const [proposalModalOpen, setProposalModalOpen] = useState(false);
   const [selectedProposal, setSelectedProposal] = useState<any>(null);
 
-  const [workspaceModalOpen, setWorkspaceModalOpen] = useState(false);
-  const [selectedWorkspaceOrder, setSelectedWorkspaceOrder] = useState<any>(null);
+  // Demo payment fallback state (active only when Razorpay keys are not configured in backend)
+  const [demoModalOpen, setDemoModalOpen] = useState(false);
+  const [demoPaymentDetails, setDemoPaymentDetails] = useState<any>(null);
+  const [demoPaymentLoading, setDemoPaymentLoading] = useState(false);
 
   // Direct freelancer chat modal state
   const [directChatOpen, setDirectChatOpen] = useState(false);
@@ -129,7 +537,208 @@ export default function Dashboard() {
 
   // Messages inbox state
   const [selectedInboxThread, setSelectedInboxThread] = useState<any>(null);
+  useEffect(() => {
+    selectedInboxThreadRef.current = selectedInboxThread;
+  }, [selectedInboxThread]);
   const [inboxChatInput, setInboxChatInput] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatFileInputRef = useRef<HTMLInputElement>(null);
+  const typingTimeoutRef = useRef<any>(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const previousConvIdRef = useRef<string | null>(null);
+
+  // Inbox threads — derived from real MongoDB conversations, supplemented by proposal & order contacts
+  const inboxThreads = useMemo(() => {
+    const threadsMap = new Map<string, any>();
+    const knownParticipantIds = new Set<string>();
+    const knownConversationIds = new Set<string>();
+    const knownNames = new Set<string>();
+
+    const formatThreadTime = (dateStr?: string | Date) => {
+      if (!dateStr) return '';
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return '';
+      const now = new Date();
+      if (d.toDateString() === now.toDateString()) {
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    };
+
+    // 1. Real conversations from MongoDB
+    dbConversations.forEach((conv: any) => {
+      const other = conv.otherParticipant;
+      if (!other) return;
+      const otherId = String(other._id || '');
+      const name = other.name || 'User';
+      const normName = name.toLowerCase().trim();
+      const threadId = `thread-${conv._id}`;
+
+      const threadObj = {
+        id: threadId,
+        conversationId: String(conv._id),
+        participantId: otherId,
+        name,
+        role: other.role === 'client' ? 'Hirer' : 'Freelancer',
+        avatarBg: other.avatarColor || '#22D3EE',
+        avatar: other.avatar || null,
+        initials: name.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() || 'U',
+        lastMessage: conv.lastMessage || 'No messages yet',
+        time: formatThreadTime(conv.lastMessageAt || conv.updatedAt),
+        unread: conv.unreadCount || 0,
+        online: true,
+      };
+
+      const key = otherId || normName;
+      threadsMap.set(key, threadObj);
+      if (otherId) knownParticipantIds.add(otherId);
+      if (conv._id) knownConversationIds.add(String(conv._id));
+      if (normName) knownNames.add(normName);
+    });
+
+    // 2. Build from proposals (if not already in conversations)
+    dashboardData.proposals.forEach((p: any, i: number) => {
+      const counterparty = isFreelancer ? p.gig?.client : p.freelancer;
+      const counterpartyId = String(counterparty?._id || '');
+      const name = counterparty?.name || '';
+      const normName = name.toLowerCase().trim();
+
+      if (!name) return;
+      if (counterpartyId && knownParticipantIds.has(counterpartyId)) return;
+      if (normName && knownNames.has(normName)) return;
+
+      const threadId = `thread-${counterpartyId || normName.replace(/\s+/g, '-')}`;
+      const threadObj = {
+        id: threadId,
+        participantId: counterpartyId,
+        name,
+        role: isFreelancer ? 'Hirer' : 'Freelancer',
+        avatarBg: counterparty?.avatarColor || getAvatarBg(i),
+        avatar: counterparty?.avatar || null,
+        initials: name.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() || 'U',
+        lastMessage: p.coverLetter ? p.coverLetter.slice(0, 80) + '...' : 'Sent a proposal',
+        time: formatThreadTime(p.createdAt),
+        unread: 0,
+        online: false,
+      };
+
+      const key = counterpartyId || normName;
+      threadsMap.set(key, threadObj);
+      if (counterpartyId) knownParticipantIds.add(counterpartyId);
+      if (normName) knownNames.add(normName);
+    });
+
+    // 3. Build from orders (if not already in conversations)
+    dashboardData.orders.forEach((o: any, i: number) => {
+      const counterparty = user?.role === 'client' ? o.freelancer : o.client;
+      const counterpartyId = String(counterparty?._id || '');
+      const name = counterparty?.name;
+      const normName = (name || '').toLowerCase().trim();
+
+      if (!name) return;
+      if (counterpartyId && knownParticipantIds.has(counterpartyId)) return;
+      if (normName && knownNames.has(normName)) return;
+
+      const threadId = `thread-${counterpartyId || normName.replace(/\s+/g, '-')}`;
+      const threadObj = {
+        id: threadId,
+        participantId: counterpartyId,
+        name,
+        role: 'Collaborator',
+        avatarBg: counterparty?.avatarColor || getAvatarBg(i + 10),
+        avatar: counterparty?.avatar || null,
+        initials: name.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() || 'U',
+        lastMessage: `Working on: ${o.gig?.title || 'Project'}`,
+        time: '',
+        unread: 0,
+        online: false,
+      };
+
+      const key = counterpartyId || normName;
+      threadsMap.set(key, threadObj);
+      if (counterpartyId) knownParticipantIds.add(counterpartyId);
+      if (normName) knownNames.add(normName);
+    });
+
+    // Ensure active selected thread is included in the sidebar thread list if not already present
+    if (selectedInboxThread) {
+      const sId = String(selectedInboxThread.participantId || '');
+      const sConvId = String(selectedInboxThread.conversationId || '');
+      const sName = (selectedInboxThread.name || '').toLowerCase().trim();
+
+      const alreadyExists = (sId && knownParticipantIds.has(sId)) ||
+        (sConvId && knownConversationIds.has(sConvId)) ||
+        (sName && knownNames.has(sName));
+
+      if (!alreadyExists) {
+        const key = sId || sName || selectedInboxThread.id;
+        threadsMap.set(key, selectedInboxThread);
+      }
+    }
+
+    return Array.from(threadsMap.values());
+  }, [dbConversations, dashboardData.proposals, dashboardData.orders, isFreelancer, user?.role, selectedInboxThread]);
+
+  // Active inbox thread defaults to top thread if none manually selected
+  const activeInboxThread = selectedInboxThread || (inboxThreads.length > 0 ? inboxThreads[0] : null);
+
+  // Auto-select first thread when entering Messages tab if none selected, or clear notifications for current thread
+  useEffect(() => {
+    if (activeTab === 'Messages') {
+      if (!selectedInboxThread && inboxThreads.length > 0) {
+        handleSelectConversation(inboxThreads[0]);
+      } else if (selectedInboxThread) {
+        clearNotificationsForConversation(selectedInboxThread.conversationId, selectedInboxThread.participantId);
+      }
+    }
+  }, [activeTab, selectedInboxThread, inboxThreads, clearNotificationsForConversation]);
+
+  const handleOpenWorkspace = (orderId?: string) => {
+    activeTabRef.current = 'Workspace';
+    setActiveTab('Workspace');
+    const targetOrderId = orderId || searchParams.get('orderId') ||
+      dashboardData.orders.find((o: any) =>
+        ['active', 'delivered', 'revision_requested', 'in_review'].includes(o.status)
+      )?._id ||
+      dashboardData.orders[0]?._id;
+
+    if (targetOrderId) {
+      setSearchParams({ tab: 'Workspace', orderId: targetOrderId });
+    } else {
+      setSearchParams({ tab: 'Workspace' });
+    }
+    if (window.scrollY > 0) {
+      window.scrollTo(0, 0);
+    }
+  };
+
+  const handleTabClick = (tabName: string) => {
+    activeTabRef.current = tabName;
+    if (tabName === 'Workspace') {
+      handleOpenWorkspace(searchParams.get('orderId') || undefined);
+      return;
+    }
+    setActiveTab(tabName);
+    setSearchParams({ tab: tabName });
+    if (tabName === 'Messages') {
+      const threadToOpen = selectedInboxThread || (inboxThreads.length > 0 ? inboxThreads[0] : null);
+      if (threadToOpen) {
+        handleSelectConversation(threadToOpen);
+      }
+    }
+    if (window.scrollY > 0) {
+      window.scrollTo(0, 0);
+    }
+  };
+
+  // Quick reply suggestions
+  const quickReplies = [
+    "I'm interested! Let's discuss.",
+    "What's the timeline?",
+    "Can we discuss the budget?",
+    "Sounds good, let's proceed!",
+    "Could you share more details?",
+  ];
 
   // Payments Page State
   const [paymentFilter, setPaymentFilter] = useState<'All' | 'Pending' | 'Paid' | 'Refunded'>('All');
@@ -145,47 +754,95 @@ export default function Dashboard() {
   const [inputRating, setInputRating] = useState(5);
   const [inputReviewText, setInputReviewText] = useState('');
 
-  // ========================================
-  // REAL BACKEND DATA via useDashboardData
-  // ========================================
-  const dashboardData = useDashboardData(user);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
 
-  const handleOpenDirectChat = (proposal: any) => {
+  const handleOpenDirectChat = async (proposal: any) => {
     setProposalModalOpen(false);
+    const myId = String((user as any)?._id || (user as any)?.id || '');
 
-    const threadId = `thread-${(proposal.name || '').toLowerCase().replace(/\s+/g, '-')}`;
-    const thread = {
-      id: threadId,
-      name: proposal.name,
-      role: proposal.role,
-      avatarBg: proposal.avatarBg,
-      initials: proposal.initials,
-      lastMessage: proposal.coverLetter || '',
-      time: 'Just now',
-      unread: 0,
-      online: true,
-    };
+    // Resolve the other participant's ID and name
+    let targetUserId = proposal.targetUserId;
+    if (!targetUserId) {
+      if (isFreelancer) {
+        targetUserId = proposal.clientId || proposal.rawProposal?.gig?.client?._id || proposal.rawProposal?.gig?.client;
+      } else {
+        targetUserId = proposal.freelancerId || proposal.rawProposal?.freelancer?._id || proposal.rawProposal?.freelancer;
+      }
+    }
+    targetUserId = String(targetUserId || '');
 
-    if (!chatConversations[threadId]) {
-      setChatConversations(prev => ({
-        ...prev,
-        [threadId]: [
-          {
-            id: 'm-init-1',
-            sender: 'them',
-            text: `Hi! Thank you for reviewing my proposal for "${proposal.title}". I'm excited about this project and happy to answer any questions regarding timeline, deliverables, or Figma workflow!`,
-            time: 'Just now',
-          }
-        ]
-      }));
+    const targetName = isFreelancer
+      ? (proposal.hirerName || proposal.name || proposal.rawProposal?.gig?.client?.name || 'Hirer')
+      : (proposal.freelancerName || proposal.name || proposal.rawProposal?.freelancer?.name || 'Freelancer');
+
+    // Switch to Messages view
+    handleTabClick('Messages');
+
+    // If an existing thread already exists for this counterparty, select it directly
+    const existingThread = inboxThreads.find((t: any) =>
+      (targetUserId && String(t.participantId) === targetUserId) ||
+      (targetName && t.name?.toLowerCase().trim() === targetName.toLowerCase().trim())
+    );
+
+    if (existingThread) {
+      await handleSelectConversation(existingThread);
+      return;
     }
 
-    setSelectedInboxThread(thread);
-    handleTabClick('Messages');
+    const threadId = `thread-${targetUserId || targetName.toLowerCase().replace(/\s+/g, '-')}`;
+    const baseThread = {
+      id: threadId,
+      name: targetName,
+      role: isFreelancer ? 'Hirer' : 'Freelancer',
+      avatarBg: proposal.avatarBg || proposal.avatarColor || '#22D3EE',
+      avatar: proposal.avatar || null,
+      initials: targetName.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() || 'U',
+      lastMessage: proposal.coverLetter ? proposal.coverLetter.slice(0, 80) + '...' : '',
+      time: proposal.createdAt ? new Date(proposal.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Just now',
+      unread: 0,
+      online: true,
+      participantId: targetUserId,
+    };
+
+    setSelectedInboxThread(baseThread);
+
+    if (targetUserId && targetUserId !== myId) {
+      try {
+        const res = await api.post('/api/messages/conversation/get-or-create', { targetUserId });
+        const conv = res.data.data.conversation;
+        const convId = conv._id;
+
+        joinConversation(convId);
+        previousConvIdRef.current = convId;
+
+        setSelectedInboxThread((prev: any) => ({
+          ...prev,
+          conversationId: convId,
+          id: `thread-${convId}`,
+        }));
+
+        const msgRes = await api.get(`/api/messages/conversation/${convId}`);
+        const msgs = msgRes.data.data.messages || [];
+        setChatConversations(prev => ({
+          ...prev,
+          [`thread-${convId}`]: msgs.map((m: any) => ({
+            id: m._id,
+            sender: (String(m.senderId) === myId || String(m.senderId?._id) === myId) ? 'me' : 'them',
+            text: m.content,
+            messageType: m.messageType || 'text',
+            attachments: m.attachments || [],
+            time: new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          })),
+        }));
+
+        fetchConversations();
+      } catch (err) {
+        console.error('Failed to init direct chat conversation:', err);
+      }
+    }
   };
 
-  // Activities state for real notifications
+  // Activities state for legacy activities
   const [activities, setActivities] = useState<any[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
 
@@ -226,25 +883,104 @@ export default function Dashboard() {
   const handleAcceptProposal = async (proposalId: string) => {
     setAcceptingId(proposalId);
     try {
-      await api.post('/api/orders/accept', { proposalId });
-      toast.success('Proposal accepted successfully! Work order created.');
+      const res = await api.post('/api/payments/create-order', { proposalId });
+      const data = res.data.data;
+
+      if (data.mode === 'razorpay') {
+        // Razorpay Gateway Flow (Live / Test mode)
+        await openRazorpayModal({
+          key: data.keyId,
+          amount: data.amount,
+          currency: data.currency || 'INR',
+          name: 'GigMatch Escrow',
+          description: `Escrow Hold for ${data.gigTitle || 'Project'}`,
+          order_id: data.orderId,
+          prefill: {
+            name: user?.name,
+            email: user?.email,
+          },
+          handler: async (response) => {
+            try {
+              setAcceptingId(proposalId);
+              const verifyRes = await api.post('/api/payments/verify-signature', {
+                proposalId,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              });
+              toast.success('Payment verified & escrow secured! Order is now active.');
+              setProposalModalOpen(false);
+              setDirectChatOpen(false);
+              dashboardData.refetch();
+              if (verifyRes.data.data.order?._id) {
+                handleOpenWorkspace(verifyRes.data.data.order._id);
+              }
+            } catch (err: any) {
+              toast.error(err.response?.data?.message || 'Payment signature verification failed.');
+            } finally {
+              setAcceptingId(null);
+            }
+          },
+          onDismiss: async () => {
+            setAcceptingId(null);
+            await api.post('/api/payments/record-failure', {
+              razorpay_order_id: data.orderId,
+              reason: 'Payment cancelled by client',
+            }).catch(() => {});
+            toast.info('Payment was cancelled. Order was not created.');
+          },
+          onFailed: async (error: any) => {
+            setAcceptingId(null);
+            await api.post('/api/payments/record-failure', {
+              razorpay_order_id: data.orderId,
+              reason: error?.description || 'Payment failed at gateway',
+            }).catch(() => {});
+            toast.error(`Payment failed: ${error?.description || 'Transaction unsuccessful'}. Order not created.`);
+          },
+        });
+      } else {
+        // Fallback: Razorpay keys not configured in backend .env -> Open Demo Payment Modal
+        setDemoPaymentDetails({
+          proposalId,
+          gigTitle: data.gigTitle,
+          totalAmount: data.totalAmount,
+          platformCommission: data.platformCommission,
+          freelancerEarnings: data.freelancerEarnings,
+        });
+        setDemoModalOpen(true);
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to initiate payment.');
+    } finally {
+      setAcceptingId(null);
+    }
+  };
+
+  const handleConfirmDemoPayment = async () => {
+    if (!demoPaymentDetails?.proposalId) return;
+    setDemoPaymentLoading(true);
+    try {
+      const res = await api.post('/api/payments/demo-payment', {
+        proposalId: demoPaymentDetails.proposalId,
+      });
+      toast.success('Demo payment confirmed! Order created & escrow held.');
+      setDemoModalOpen(false);
       setProposalModalOpen(false);
       setDirectChatOpen(false);
       dashboardData.refetch();
-    } catch {
-      toast.success('Proposal accepted & milestone escrow reserved!');
-      setProposalModalOpen(false);
-      setDirectChatOpen(false);
+      if (res.data.data.order?._id) {
+        handleOpenWorkspace(res.data.data.order._id);
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to process demo payment.');
     } finally {
-      setAcceptingId(null);
+      setDemoPaymentLoading(false);
     }
   };
 
   // ========================================
   // DERIVED DATA FROM REAL BACKEND
   // ========================================
-  const avatarColors = ['#A3E635', '#22D3EE', '#D8B4FE', '#F9A8D4', '#FFB347', '#FF6B6B', '#34D399', '#818CF8'];
-  const getAvatarBg = (index: number) => avatarColors[index % avatarColors.length];
 
   // Map category enums to display names
   const categoryDisplayMap: Record<string, string> = {
@@ -257,7 +993,7 @@ export default function Dashboard() {
   };
 
   // Gigs — real data only, no fallback
-  const displayedGigs = dashboardData.gigs.map((g: any, i: number) => ({
+  const displayedGigs = useMemo(() => dashboardData.gigs.map((g: any, i: number) => ({
     id: g._id || `gig-${i}`,
     rawId: g._id,
     title: g.title,
@@ -269,19 +1005,20 @@ export default function Dashboard() {
     status: g.status === 'open' ? 'Active Brief' : g.status === 'in-progress' ? 'In Progress' : g.status === 'completed' ? 'Completed' : (g.status || 'Active Brief'),
     rawStatus: g.status,
     postedDate: new Date(g.createdAt || Date.now()).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  }));
+  })), [dashboardData.gigs]);
 
   // Orders — real data only, no fallback
-  const displayedOrders = dashboardData.orders.map((o: any, i: number) => {
+  const displayedOrders = useMemo(() => dashboardData.orders.map((o: any, i: number) => {
     const milestones = o.milestones || [];
     const completedMilestones = milestones.filter((m: any) => m.status === 'paid' || m.status === 'approved').length;
     const totalMilestones = milestones.length || 1;
     const currentMilestone = Math.min(completedMilestones + 1, totalMilestones);
     const progress = totalMilestones > 0 ? Math.round((completedMilestones / totalMilestones) * 100) : 0;
     const hasPendingMilestone = milestones.some((m: any) => m.status === 'pending');
-    const counterpartyName = user?.role === 'client'
-      ? (o.freelancer?.name || `Creator ${i + 1}`)
-      : (o.client?.name || `Client ${i + 1}`);
+    const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
+    const counterpartyName = counterpartyUser?.name || (user?.role === 'client' ? `Creator ${i + 1}` : `Client ${i + 1}`);
+    const counterpartyAvatar = counterpartyUser?.avatar || null;
+    const counterpartyAvatarColor = counterpartyUser?.avatarColor || null;
 
     return {
       id: o._id || `order-${i}`,
@@ -289,6 +1026,8 @@ export default function Dashboard() {
       freelancerName: counterpartyName,
       freelancerRole: user?.role === 'client' ? 'Freelancer' : 'Client',
       avatarBg: getAvatarBg(i),
+      avatar: counterpartyAvatar,
+      avatarColor: counterpartyAvatarColor,
       initials: counterpartyName.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
       projectTitle: o.gig?.title || 'Project',
       milestone: `Milestone ${currentMilestone} of ${totalMilestones}`,
@@ -303,27 +1042,50 @@ export default function Dashboard() {
       status: o.status,
       rawStatus: o.status,
     };
-  });
+  }), [dashboardData.orders, user?.role]);
 
   // Proposals — real data mapped for display
-  const allProposals = dashboardData.proposals.map((p: any, idx: number) => ({
-    id: p._id || `prop-${idx}`,
-    rawId: p._id,
-    name: p.freelancer?.name || (p.gig?.client?.name || 'User'),
-    price: `₹${(p.proposedPrice || 0).toLocaleString('en-IN')}`,
-    priceNum: p.proposedPrice || 0,
-    title: p.gig?.title || 'Project',
-    avatarBg: getAvatarBg(idx),
-    initials: ((p.freelancer?.name || p.gig?.client?.name || 'U')).split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
-    skills: p.gig?.tags || [],
-    coverLetter: p.coverLetter || '',
-    timeline: `${p.estimatedDays || 7} days`,
-    status: p.status,
-    createdAt: p.createdAt,
-  }));
+  const allProposals = useMemo(() => dashboardData.proposals.map((p: any, idx: number) => {
+    const counterparty = isFreelancer ? p.gig?.client : p.freelancer;
+    const counterpartyName = counterparty?.name || (isFreelancer ? 'Hirer' : 'Freelancer');
+    const counterpartyAvatar = counterparty?.avatar || null;
+    const counterpartyAvatarColor = counterparty?.avatarColor || null;
+    const counterpartyInitials = counterpartyName
+      .split(' ')
+      .filter(Boolean)
+      .map((n: string) => n[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || (isFreelancer ? 'H' : 'F');
+
+    return {
+      id: p._id || `prop-${idx}`,
+      rawId: p._id,
+      rawProposal: p,
+      freelancerId: p.freelancer?._id || p.freelancer,
+      clientId: p.gig?.client?._id || p.gig?.client,
+      targetUserId: isFreelancer ? (p.gig?.client?._id || p.gig?.client) : (p.freelancer?._id || p.freelancer),
+      name: counterpartyName,
+      hirerName: p.gig?.client?.name || 'Hirer',
+      freelancerName: p.freelancer?.name || 'Freelancer',
+      role: isFreelancer ? 'Hirer' : 'Freelancer',
+      price: `₹${(p.proposedPrice || 0).toLocaleString('en-IN')}`,
+      priceNum: p.proposedPrice || 0,
+      title: p.gig?.title || 'Project',
+      avatarBg: counterpartyAvatarColor || getAvatarBg(idx),
+      avatar: counterpartyAvatar,
+      avatarColor: counterpartyAvatarColor,
+      initials: counterpartyInitials,
+      skills: p.gig?.tags || [],
+      coverLetter: p.coverLetter || '',
+      timeline: `${p.estimatedDays || 7} days`,
+      status: p.status,
+      createdAt: p.createdAt,
+    };
+  }), [dashboardData.proposals, isFreelancer]);
 
   // Filtered Gigs for Projects Tab
-  const filteredProjectsGigs = displayedGigs.filter((g: any) => {
+  const filteredProjectsGigs = useMemo(() => displayedGigs.filter((g: any) => {
     const matchesFilter = gigFilter === 'All'
       ? true
       : gigFilter === 'open'
@@ -336,40 +1098,40 @@ export default function Dashboard() {
     const matchesSearch = g.title.toLowerCase().includes(gigSearch.toLowerCase()) ||
                           g.category.toLowerCase().includes(gigSearch.toLowerCase());
     return matchesFilter && matchesSearch;
-  });
+  }), [displayedGigs, gigFilter, gigSearch]);
 
   // Filtered Proposals for Proposals Tab
-  const filteredTabProposals = allProposals.filter((p: any) => {
+  const filteredTabProposals = useMemo(() => allProposals.filter((p: any) => {
     const matchesFilter = proposalFilter === 'All' ? true : p.status === proposalFilter;
     const matchesSearch = p.name.toLowerCase().includes(proposalSearch.toLowerCase()) ||
                           p.title.toLowerCase().includes(proposalSearch.toLowerCase()) ||
                           p.coverLetter.toLowerCase().includes(proposalSearch.toLowerCase());
     return matchesFilter && matchesSearch;
-  });
+  }), [allProposals, proposalFilter, proposalSearch]);
 
   // Filtered Orders for Orders Tab
-  const filteredTabOrders = displayedOrders.filter((o: any) => {
+  const filteredTabOrders = useMemo(() => displayedOrders.filter((o: any) => {
     const matchesFilter = orderFilter === 'All' ? true : o.rawStatus === orderFilter || o.status === orderFilter;
     const matchesSearch = o.projectTitle.toLowerCase().includes(orderSearch.toLowerCase()) ||
                           o.freelancerName.toLowerCase().includes(orderSearch.toLowerCase());
     return matchesFilter && matchesSearch;
-  });
+  }), [displayedOrders, orderFilter, orderSearch]);
 
-  const filteredProposals = allProposals.filter((p: any) =>
+  const filteredProposals = useMemo(() => allProposals.filter((p: any) =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     p.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-  const priorityProposals = filteredProposals.slice(0, 5);
+  ), [allProposals, searchQuery]);
+  const priorityProposals = useMemo(() => filteredProposals.slice(0, 5), [filteredProposals]);
 
   // ----------------------------------------------------
   // PAYMENTS — Derived from real orders & milestones
   // ----------------------------------------------------
   const pendingPaymentsFromOrders = dashboardData.orders
-    .filter((o: any) => o.status === 'active')
     .flatMap((o: any, oi: number) => {
-      const counterparty = user?.role === 'client'
-        ? (o.freelancer?.name || `Creator ${oi + 1}`)
-        : (o.client?.name || `Client ${oi + 1}`);
+      const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
+      const counterparty = counterpartyUser?.name || (user?.role === 'client' ? `Creator ${oi + 1}` : `Client ${oi + 1}`);
+      const counterpartyAvatar = counterpartyUser?.avatar || null;
+      const counterpartyAvatarColor = counterpartyUser?.avatarColor || null;
       return (o.milestones || [])
         .map((m: any, mi: number) => ({ m, mi }))
         .filter(({ m }: any) => m.status === 'pending')
@@ -378,8 +1140,10 @@ export default function Dashboard() {
           orderId: o._id,
           milestoneIndex: mi,
           freelancerName: counterparty,
-          freelancerRole: 'Freelancer',
+          freelancerRole: user?.role === 'client' ? 'Freelancer' : 'Client',
           avatarBg: getAvatarBg(oi),
+          avatar: counterpartyAvatar,
+          avatarColor: counterpartyAvatarColor,
           initials: counterparty.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
           projectName: o.gig?.title || 'Project',
           milestoneName: m.title || `Milestone ${mi + 1}`,
@@ -404,15 +1168,18 @@ export default function Dashboard() {
 
   const completedPaymentsFromOrders = dashboardData.orders
     .flatMap((o: any, oi: number) => {
-      const counterparty = user?.role === 'client'
-        ? (o.freelancer?.name || `Creator ${oi + 1}`)
-        : (o.client?.name || `Client ${oi + 1}`);
+      const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
+      const counterparty = counterpartyUser?.name || (user?.role === 'client' ? `Creator ${oi + 1}` : `Client ${oi + 1}`);
+      const counterpartyAvatar = counterpartyUser?.avatar || null;
+      const counterpartyAvatarColor = counterpartyUser?.avatarColor || null;
       return (o.milestones || [])
         .filter((m: any) => m.status === 'paid' || m.status === 'approved')
         .map((m: any, mi: number) => ({
           id: `tx-${o._id}-${mi}`,
           freelancerName: counterparty,
           avatarBg: getAvatarBg(oi),
+          avatar: counterpartyAvatar,
+          avatarColor: counterpartyAvatarColor,
           initials: counterparty.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
           project: o.gig?.title || 'Project',
           milestone: m.title || `Milestone ${mi + 1}`,
@@ -475,14 +1242,17 @@ export default function Dashboard() {
   const pendingReviewsFromOrders = dashboardData.orders
     .filter((o: any) => o.status === 'completed' && !reviewedOrderIds.has(o._id?.toString()))
     .map((o: any, i: number) => {
-      const counterparty = user?.role === 'client'
-        ? (o.freelancer?.name || `Creator ${i + 1}`)
-        : (o.client?.name || `Client ${i + 1}`);
+      const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
+      const counterparty = counterpartyUser?.name || (user?.role === 'client' ? `Creator ${i + 1}` : `Client ${i + 1}`);
+      const counterpartyAvatar = counterpartyUser?.avatar || null;
+      const counterpartyAvatarColor = counterpartyUser?.avatarColor || null;
       return {
         id: o._id,
         freelancerName: counterparty,
-        freelancerRole: 'Freelancer',
+        freelancerRole: user?.role === 'client' ? 'Freelancer' : 'Client',
         avatarBg: getAvatarBg(i),
+        avatar: counterpartyAvatar,
+        avatarColor: counterpartyAvatarColor,
         initials: counterparty.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
         projectName: o.gig?.title || 'Project',
         completionDate: o.completedAt
@@ -502,35 +1272,107 @@ export default function Dashboard() {
     }
   }, [dashboardData.orders, dashboardData.reviews, dashboardData.loading]);
 
-  // Reviews given mapped to completed projects view
-  const completedProjectsFromReviews = dashboardData.reviews
-    .filter((r: any) => r.from?._id === user?.id || r.from === user?.id)
-    .map((r: any, i: number) => {
-      const reviewer = r.to?.name || 'User';
-      return {
+  // Reviews and completed orders mapped to completed projects view
+  const completedProjectsFromOrdersAndReviews = useMemo(() => {
+    const listMap = new Map<string, any>();
+
+    // 1. Completed orders
+    (dashboardData.orders || [])
+      .filter((o: any) => o.status === 'completed')
+      .forEach((o: any, i: number) => {
+        const partnerUser = isFreelancer ? o.client : o.freelancer;
+        const partnerName = partnerUser?.name || (isFreelancer ? 'Hirer' : 'Freelancer');
+        const partnerAvatar = partnerUser?.avatar || null;
+        const partnerAvatarColor = partnerUser?.avatarColor || null;
+        const partnerInitials = partnerName
+          .split(' ')
+          .filter(Boolean)
+          .map((n: string) => n[0])
+          .join('')
+          .slice(0, 2)
+          .toUpperCase() || (isFreelancer ? 'HR' : 'FL');
+
+        // Look up corresponding review if any
+        const rev = (dashboardData.reviews || []).find((r: any) =>
+          String(r.order?._id || r.order) === String(o._id)
+        );
+
+        listMap.set(String(o._id), {
+          id: o._id,
+          title: o.gig?.title || 'Contract Project',
+          freelancerName: partnerName,
+          freelancerRole: isFreelancer ? 'Hirer / Client' : 'Freelancer',
+          avatarBg: partnerAvatarColor || getAvatarBg(i),
+          avatar: partnerAvatar,
+          avatarColor: partnerAvatarColor,
+          initials: partnerInitials,
+          budget: o.totalAmount ? `₹${Number(o.totalAmount).toLocaleString('en-IN')}` : '—',
+          completionDate: o.completedAt
+            ? new Date(o.completedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            : o.updatedAt
+            ? new Date(o.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            : 'Completed',
+          ratingGiven: rev?.rating || 5,
+          status: 'Completed',
+          reviewText: rev?.comment || '',
+          orderId: o._id,
+        });
+      });
+
+    // 2. Reviews (both given and received)
+    (dashboardData.reviews || []).forEach((r: any, i: number) => {
+      const orderIdStr = String(r.order?._id || r.order || '');
+      if (orderIdStr && listMap.has(orderIdStr)) {
+        const item = listMap.get(orderIdStr);
+        item.ratingGiven = r.rating || item.ratingGiven;
+        item.reviewText = r.comment || item.reviewText;
+        return;
+      }
+
+      // Partner is the counterparty
+      const isFromMe = String(r.from?._id || r.from) === String(user?.id);
+      const partnerUser = isFromMe ? r.to : r.from;
+      const partnerName = partnerUser?.name || (isFreelancer ? 'Hirer' : 'Freelancer');
+      const partnerAvatar = partnerUser?.avatar || null;
+      const partnerAvatarColor = partnerUser?.avatarColor || null;
+      const partnerInitials = partnerName
+        .split(' ')
+        .filter(Boolean)
+        .map((n: string) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase() || (isFreelancer ? 'HR' : 'FL');
+
+      listMap.set(r._id || `rev-${i}`, {
         id: r._id || `review-${i}`,
-        title: r.order?.gig?.title || 'Project',
-        freelancerName: reviewer,
-        avatarBg: getAvatarBg(i),
-        initials: reviewer.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
-        freelancerRole: 'Collaborator',
+        title: r.order?.gig?.title || 'Contract Project',
+        freelancerName: partnerName,
+        freelancerRole: isFreelancer ? 'Hirer / Client' : 'Freelancer',
+        avatarBg: partnerAvatarColor || getAvatarBg(i),
+        avatar: partnerAvatar,
+        avatarColor: partnerAvatarColor,
+        initials: partnerInitials,
         budget: r.order?.totalAmount ? `₹${Number(r.order.totalAmount).toLocaleString('en-IN')}` : '—',
         completionDate: r.createdAt
           ? new Date(r.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-          : 'N/A',
+          : 'Completed',
         ratingGiven: r.rating || 5,
         status: 'Completed',
         reviewText: r.comment || '',
-      };
+        orderId: orderIdStr || r._id,
+      });
     });
+
+    return Array.from(listMap.values());
+  }, [dashboardData.orders, dashboardData.reviews, isFreelancer, user]);
 
   const [completedProjectsList, setCompletedProjectsList] = useState<any[]>([]);
 
   useEffect(() => {
     if (!dashboardData.loading) {
-      setCompletedProjectsList(completedProjectsFromReviews);
+      setCompletedProjectsList(completedProjectsFromOrdersAndReviews);
     }
-  }, [dashboardData.reviews, dashboardData.loading]);
+  }, [completedProjectsFromOrdersAndReviews, dashboardData.loading]);
 
   // Previous freelancers — from completed orders
   const previousFreelancers = (() => {
@@ -538,11 +1380,10 @@ export default function Dashboard() {
     dashboardData.orders
       .filter((o: any) => o.status === 'completed')
       .forEach((o: any, i: number) => {
-        const name = user?.role === 'client'
-          ? (o.freelancer?.name || '')
-          : (o.client?.name || '');
+        const partnerUser = user?.role === 'client' ? o.freelancer : o.client;
+        const name = partnerUser?.name || '';
         if (!name) return;
-        const id = (user?.role === 'client' ? o.freelancer?._id : o.client?._id) || name;
+        const id = partnerUser?._id || name;
         const existing = freelancerMap.get(id);
         if (existing) {
           existing.projectsCount += 1;
@@ -550,9 +1391,12 @@ export default function Dashboard() {
           existing.totalPaid = `₹${existing.totalPaidNum.toLocaleString('en-IN')}`;
         } else {
           freelancerMap.set(id, {
+            id,
             name,
-            role: 'Collaborator',
+            role: user?.role === 'client' ? 'Freelancer' : 'Client',
             avatarBg: getAvatarBg(i),
+            avatar: partnerUser?.avatar || null,
+            avatarColor: partnerUser?.avatarColor || null,
             initials: name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
             rating: '5.0',
             projectsCount: 1,
@@ -572,6 +1416,14 @@ export default function Dashboard() {
     setWriteReviewModalOpen(true);
   };
 
+  const handleCloseWriteReviewModal = () => {
+    setWriteReviewModalOpen(false);
+    autoReviewHandledRef.current = null;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('writeReview');
+    setSearchParams(nextParams, { replace: true });
+  };
+
   const handleSubmitReview = async () => {
     if (!inputReviewText.trim()) {
       toast.error('Please write a short review note.');
@@ -586,11 +1438,82 @@ export default function Dashboard() {
       toast.success(`Review submitted for ${targetReviewProject.freelancerName}!`);
       setPendingReviewsList(prev => prev.filter(p => p.id !== targetReviewProject.id));
       setWriteReviewModalOpen(false);
+      autoReviewHandledRef.current = null;
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('writeReview');
+      setSearchParams(nextParams, { replace: true });
       dashboardData.refetch();
     } catch {
       toast.error('Failed to submit review. Please try again.');
     }
   };
+
+  // Auto-trigger write review modal when redirected with ?writeReview=ORDER_ID
+  const writeReviewOrderId = searchParams.get('writeReview');
+  const autoReviewHandledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!writeReviewOrderId || autoReviewHandledRef.current === writeReviewOrderId) return;
+
+    // 1. Try finding in pending reviews list
+    const pendingItem = pendingReviewsList.find(
+      (p: any) => String(p.orderId || p.id) === writeReviewOrderId
+    );
+    if (pendingItem) {
+      autoReviewHandledRef.current = writeReviewOrderId;
+      handleOpenWriteReview(pendingItem);
+      return;
+    }
+
+    // 2. Try finding in dashboard orders
+    const orderItem = dashboardData.orders.find(
+      (o: any) => String(o._id) === writeReviewOrderId
+    );
+    if (orderItem) {
+      autoReviewHandledRef.current = writeReviewOrderId;
+      const counterpartyUser = user?.role === 'client' ? orderItem.freelancer : orderItem.client;
+      const counterparty = counterpartyUser?.name || 'Freelancer';
+      const projectObj = {
+        id: orderItem._id,
+        orderId: orderItem._id,
+        freelancerName: counterparty,
+        freelancerRole: user?.role === 'client' ? 'Freelancer' : 'Client',
+        avatarBg: getAvatarBg(0),
+        avatar: counterpartyUser?.avatar || null,
+        avatarColor: counterpartyUser?.avatarColor || null,
+        initials: counterparty.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+        projectName: orderItem.gig?.title || 'Completed Project',
+        budget: `₹${Number(orderItem.totalAmount || 0).toLocaleString('en-IN')}`,
+      };
+      handleOpenWriteReview(projectObj);
+      return;
+    }
+
+    // 3. Directly fetch order details via API if not in cache yet
+    api.get(`/api/orders/${writeReviewOrderId}`).then((res) => {
+      const order = res.data?.data?.order;
+      if (order) {
+        autoReviewHandledRef.current = writeReviewOrderId;
+        const counterpartyUser = user?.role === 'client' ? order.freelancer : order.client;
+        const counterparty = counterpartyUser?.name || 'Freelancer';
+        const projectObj = {
+          id: order._id,
+          orderId: order._id,
+          freelancerName: counterparty,
+          freelancerRole: user?.role === 'client' ? 'Freelancer' : 'Client',
+          avatarBg: getAvatarBg(0),
+          avatar: counterpartyUser?.avatar || null,
+          avatarColor: counterpartyUser?.avatarColor || null,
+          initials: counterparty.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
+          projectName: order.gig?.title || 'Completed Project',
+          budget: `₹${Number(order.totalAmount || 0).toLocaleString('en-IN')}`,
+        };
+        handleOpenWriteReview(projectObj);
+      }
+    }).catch((err) => {
+      console.warn('Could not fetch order for review redirect:', err);
+    });
+  }, [writeReviewOrderId, pendingReviewsList, dashboardData.orders, user]);
 
   const filteredHistoryProjects = completedProjectsList.filter(item => {
     const matchesFilter = historyFilter === 'All' ? true : item.status === historyFilter;
@@ -599,12 +1522,10 @@ export default function Dashboard() {
     return matchesFilter && matchesSearch;
   });
 
-  const isFreelancer = user?.role === 'freelancer';
-
   const sidebarNavItems = isFreelancer
     ? [
         { name: 'Dashboard', label: 'Dashboard', icon: Sparkles },
-        { name: 'Projects', label: 'My Services', icon: FolderKanban },
+        { name: 'Workspace', label: 'Workspace', icon: FolderKanban },
         { name: 'Proposals', label: 'Applications', icon: FileText },
         { name: 'Orders', label: 'Orders', icon: Package },
         { name: 'Messages', label: 'Messages', icon: MessageSquare },
@@ -613,6 +1534,7 @@ export default function Dashboard() {
       ]
     : [
         { name: 'Dashboard', label: 'Dashboard', icon: Sparkles },
+        { name: 'Workspace', label: 'Workspace', icon: FolderKanban },
         { name: 'Projects', label: 'Projects (My Gigs)', icon: FolderKanban },
         { name: 'Proposals', label: 'Proposals', icon: FileText },
         { name: 'Orders', label: 'Orders', icon: Package },
@@ -662,71 +1584,280 @@ export default function Dashboard() {
     }
   };
 
-  // Inbox threads — derived from proposals/orders counterparties (Messages tab is out of scope for backend integration)
-  const inboxThreads = (() => {
-    const threadsMap = new Map<string, any>();
-    // Build from proposals
-    dashboardData.proposals.forEach((p: any, i: number) => {
-      const name = p.freelancer?.name || p.gig?.client?.name || '';
-      if (!name || threadsMap.has(name)) return;
-      threadsMap.set(name, {
-        id: `thread-${name.toLowerCase().replace(/\s+/g, '-')}`,
-        name,
-        role: 'Collaborator',
-        avatarBg: getAvatarBg(i),
-        initials: name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
-        lastMessage: p.coverLetter ? p.coverLetter.slice(0, 80) + '...' : 'Sent a proposal',
-        time: p.createdAt ? new Date(p.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '',
-        unread: 0,
-        online: false,
-      });
-    });
-    // Build from orders
-    dashboardData.orders.forEach((o: any, i: number) => {
-      const name = user?.role === 'client' ? o.freelancer?.name : o.client?.name;
-      if (!name || threadsMap.has(name)) return;
-      threadsMap.set(name, {
-        id: `thread-${name.toLowerCase().replace(/\s+/g, '-')}`,
-        name,
-        role: 'Collaborator',
-        avatarBg: getAvatarBg(i + 10),
-        initials: name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase(),
-        lastMessage: `Working on: ${o.gig?.title || 'Project'}`,
-        time: '',
-        unread: 0,
-        online: false,
-      });
-    });
-    return Array.from(threadsMap.values());
-  })();
 
-  const handleInboxSendMessage = () => {
-    const text = inboxChatInput.trim();
-    if (!text || !selectedInboxThread) return;
 
-    const threadId = selectedInboxThread.id;
-    const newMsg = {
-      id: `inbox-msg-${Date.now()}`,
+  // Handle clicking a notification: mark read and redirect to Messages conversation
+  const handleNotificationClick = async (notif: any) => {
+    setNotificationsOpen(false);
+
+    if (!notif.read) {
+      try {
+        await api.patch(`/api/notifications/${notif._id}/read`);
+        setNotifications(prev =>
+          prev.map(n => n._id === notif._id ? { ...n, read: true } : n)
+        );
+        setUnreadNotificationCount(prev => Math.max(0, prev - 1));
+      } catch (err) {
+        console.error('Failed to mark notification read:', err);
+      }
+    }
+
+    if (notif.type === 'proposal') {
+      handleTabClick('Proposals');
+      return;
+    }
+
+    if (notif.type === 'order') {
+      handleTabClick('Orders');
+      return;
+    }
+
+    if (notif.type === 'message' || notif.conversationId || notif.senderId) {
+      handleTabClick('Messages');
+
+      const targetConvId = notif.conversationId?._id || notif.conversationId;
+      const targetSenderId = notif.senderId?._id || notif.senderId;
+
+      clearNotificationsForConversation(targetConvId, targetSenderId);
+
+      const matchingThread = inboxThreads.find((t: any) =>
+        (targetConvId && (t.conversationId === targetConvId || t.id === `thread-${targetConvId}`)) ||
+        (targetSenderId && String(t.participantId) === String(targetSenderId))
+      );
+
+      if (matchingThread) {
+        handleSelectConversation(matchingThread);
+      } else if (targetConvId) {
+        handleSelectConversation({
+          id: `thread-${targetConvId}`,
+          conversationId: targetConvId,
+          participantId: targetSenderId,
+          name: notif.senderName || notif.title || 'Collaborator',
+          role: 'Collaborator',
+          avatarBg: '#22D3EE',
+          avatar: null,
+          initials: (notif.senderName || 'U').slice(0, 2).toUpperCase(),
+          lastMessage: notif.message || '',
+          time: 'Just now',
+          unread: 0,
+          online: true,
+        });
+      } else if (targetSenderId) {
+        handleSelectConversation({
+          id: `thread-${targetSenderId}`,
+          participantId: targetSenderId,
+          name: notif.senderName || notif.title || 'Collaborator',
+          role: 'Collaborator',
+          avatarBg: '#22D3EE',
+          avatar: null,
+          initials: (notif.senderName || 'U').slice(0, 2).toUpperCase(),
+          lastMessage: notif.message || '',
+          time: 'Just now',
+          unread: 0,
+          online: true,
+        });
+      }
+    }
+  };
+
+  const handleInboxSendMessage = async (textOverride?: string) => {
+    const text = (textOverride || inboxChatInput).trim();
+    const targetThread = activeInboxThread;
+    if (!text || !targetThread) return;
+
+    const threadId = targetThread.id;
+    if (!textOverride) setInboxChatInput('');
+
+    // Stop typing indicator
+    if (targetThread.conversationId && currentUserId) {
+      emitStopTyping(targetThread.conversationId, currentUserId);
+    }
+
+    // Optimistic UI message
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMsg = {
+      id: tempId,
       sender: 'me' as const,
       text,
+      messageType: 'text' as const,
+      attachments: [],
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setChatConversations(prev => ({
       ...prev,
-      [threadId]: [...(prev[threadId] || []), newMsg]
+      [threadId]: [...(prev[threadId] || []), optimisticMsg],
     }));
-    setInboxChatInput('');
+
+    try {
+      const res = await api.post('/api/messages', {
+        conversationId: targetThread.conversationId,
+        receiverId: targetThread.participantId,
+        content: text,
+      });
+
+      const savedMsg = res.data.data.message;
+      setChatConversations(prev => {
+        const list = prev[threadId] || [];
+        const alreadyHasSaved = list.some((m: any) => m.id === savedMsg._id);
+        if (alreadyHasSaved) {
+          return {
+            ...prev,
+            [threadId]: list.filter((m: any) => m.id !== tempId),
+          };
+        }
+        return {
+          ...prev,
+          [threadId]: list.map((m: any) => m.id === tempId ? {
+            ...m,
+            id: savedMsg._id,
+          } : m),
+        };
+      });
+
+      if (!targetThread.conversationId && savedMsg.conversationId) {
+        joinConversation(savedMsg.conversationId);
+        previousConvIdRef.current = savedMsg.conversationId;
+        setSelectedInboxThread((prev: any) => ({
+          ...(prev || targetThread),
+          conversationId: savedMsg.conversationId,
+          id: `thread-${savedMsg.conversationId}`,
+        }));
+      }
+
+      fetchConversations();
+    } catch (err) {
+      console.error('Failed to send message:', err);
+      toast.error('Failed to send message. Please try again.');
+    }
   };
 
-  const displayName = user?.name || 'Harshit';
-  const userInitials = (user?.name || 'Harshit')
+  // Auto-scroll chat to bottom on new messages
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatConversations, activeInboxThread]);
+
+  // Handle typing input with debounced typing indicator
+  const handleInboxInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInboxChatInput(e.target.value);
+
+    const convId = activeInboxThread?.conversationId;
+    if (!convId || !currentUserId) return;
+
+    emitTyping(convId, currentUserId);
+
+    // Clear previous timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    // Auto stop typing after 2s of no input
+    typingTimeoutRef.current = setTimeout(() => {
+      emitStopTyping(convId, currentUserId);
+    }, 2000);
+  };
+
+  // Handle media upload for chat
+  const handleChatMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const targetThread = activeInboxThread;
+    if (!file || !targetThread) return;
+
+    // Reset file input
+    if (chatFileInputRef.current) chatFileInputRef.current.value = '';
+
+    // Validate file size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('File size must be under 5MB');
+      return;
+    }
+
+    setUploadingMedia(true);
+    try {
+      // Upload the file
+      const formData = new FormData();
+      formData.append('file', file);
+      const uploadRes = await api.post('/api/uploads/chat-media', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const { url, fileName, fileSize, fileType } = uploadRes.data.data;
+      const isImage = fileType.startsWith('image/');
+
+      const threadId = targetThread.id;
+
+      // Optimistic UI
+      const tempId = `temp-${Date.now()}`;
+      const optimisticMsg = {
+        id: tempId,
+        sender: 'me' as const,
+        text: isImage ? '📷 Image' : `📎 ${fileName}`,
+        messageType: isImage ? 'image' as const : 'file' as const,
+        attachments: [{ url, fileName, fileSize, fileType }],
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+
+      setChatConversations(prev => ({
+        ...prev,
+        [threadId]: [...(prev[threadId] || []), optimisticMsg],
+      }));
+
+      // Send the message with attachment
+      const res = await api.post('/api/messages', {
+        conversationId: targetThread.conversationId,
+        receiverId: targetThread.participantId,
+        content: isImage ? '📷 Image' : `📎 ${fileName}`,
+        messageType: isImage ? 'image' : 'file',
+        attachments: [{ url, fileName, fileSize, fileType }],
+      });
+
+      const savedMsg = res.data.data.message;
+      setChatConversations(prev => {
+        const list = prev[threadId] || [];
+        const alreadyHasSaved = list.some((m: any) => m.id === savedMsg._id);
+        if (alreadyHasSaved) {
+          return {
+            ...prev,
+            [threadId]: list.filter((m: any) => m.id !== tempId),
+          };
+        }
+        return {
+          ...prev,
+          [threadId]: list.map((m: any) => m.id === tempId ? {
+            ...m,
+            id: savedMsg._id,
+          } : m),
+        };
+      });
+
+      if (!targetThread.conversationId && savedMsg.conversationId) {
+        joinConversation(savedMsg.conversationId);
+        previousConvIdRef.current = savedMsg.conversationId;
+        setSelectedInboxThread((prev: any) => ({
+          ...(prev || targetThread),
+          conversationId: savedMsg.conversationId,
+          id: `thread-${savedMsg.conversationId}`,
+        }));
+      }
+
+      fetchConversations();
+    } catch (err) {
+      console.error('Failed to upload media:', err);
+      toast.error('Failed to upload file. Please try again.');
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  const displayName = user?.name || 'User';
+  const userInitials = (user?.name || 'User')
     .split(' ')
     .filter(Boolean)
     .map((n: string) => n[0])
     .join('')
     .slice(0, 2)
-    .toUpperCase() || 'H';
+    .toUpperCase() || 'U';
 
   const getGreetingTime = () => {
     const hour = new Date().getHours();
@@ -982,13 +2113,27 @@ export default function Dashboard() {
           <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
             <div ref={notificationsRef} className="relative">
               <button
-                onClick={() => setNotificationsOpen(!notificationsOpen)}
+                onClick={async () => {
+                  const willOpen = !notificationsOpen;
+                  setNotificationsOpen(willOpen);
+                  if (willOpen && unreadNotificationCount > 0) {
+                    try {
+                      await api.patch('/api/notifications/mark-all-read');
+                      setUnreadNotificationCount(0);
+                      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+                    } catch (err) {
+                      console.error('Failed to mark notifications read:', err);
+                    }
+                  }
+                }}
                 className="relative w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-white border border-border flex items-center justify-center text-ink hover:border-purple/30 hover:bg-soft transition-all cursor-pointer shadow-xs"
                 title="Notifications"
                 aria-label="Notifications"
               >
                 <Bell size={17} />
-                <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-coral ring-2 ring-white" />
+                {unreadNotificationCount > 0 && (
+                  <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-coral ring-2 ring-white" />
+                )}
               </button>
 
               {notificationsOpen && (
@@ -998,28 +2143,79 @@ export default function Dashboard() {
                       Notifications
                     </span>
                     <span className="text-[11px] font-bold text-purple bg-purple/10 px-2 py-0.5 rounded-full">
-                      {activities.length} Updates
+                      {unreadNotificationCount > 0 ? `${unreadNotificationCount} New` : `${notifications.length || activities.length} Updates`}
                     </span>
                   </div>
                   <div className="space-y-2.5 max-h-72 overflow-y-auto">
-                    {loadingActivities ? (
+                    {loadingNotifications ? (
                       <div className="py-4 text-center text-xs text-ink/50">Loading notifications...</div>
-                    ) : activities.length === 0 ? (
+                    ) : (notifications.length === 0 && activities.length === 0) ? (
                       <div className="py-6 text-center text-xs text-ink/50">No notifications yet</div>
                     ) : (
-                      activities.map((act: any) => (
-                        <div key={act._id} className="p-2.5 rounded-xl bg-soft text-xs space-y-0.5">
-                          <div className="font-bold text-ink">
-                            {act.title}
+                      (notifications.length > 0 ? notifications : activities).map((item: any) => {
+                        const senderObj = typeof item.senderId === 'object' && item.senderId !== null ? item.senderId : null;
+                        const sName = item.senderName || senderObj?.name;
+                        const sAvatar = item.senderAvatar || senderObj?.avatar;
+                        const sAvatarColor = item.senderAvatarColor || senderObj?.avatarColor || '#22D3EE';
+                        const sInitials = sName ? sName.split(' ').filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'GM';
+
+                        let displayMessage = item.message || item.description || '';
+                        if (displayMessage.startsWith('Someone:')) {
+                          displayMessage = displayMessage.replace(/^Someone:/, `${sName || 'User'}:`);
+                        }
+
+                        return (
+                          <div
+                            key={item._id}
+                            onClick={() => handleNotificationClick(item)}
+                            className={`p-2.5 rounded-xl text-xs cursor-pointer hover:bg-purple/10 hover:border-purple/30 transition-all ${
+                              item.read === false ? 'bg-purple/5 border border-purple/20' : 'bg-soft'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2.5">
+                              {(sAvatar || sName) && (
+                                <div
+                                  className="w-8 h-8 rounded-full flex items-center justify-center font-clash font-bold text-[10px] text-ink shrink-0 overflow-hidden shadow-xs mt-0.5"
+                                  style={{ backgroundColor: sAvatarColor }}
+                                >
+                                  {sAvatar ? (
+                                    <img src={sAvatar} alt={sName || 'User'} className="w-full h-full object-cover" />
+                                  ) : (
+                                    sInitials
+                                  )}
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0 space-y-0.5">
+                                <div className="font-bold text-ink flex items-center justify-between">
+                                  <span className="truncate">{item.title}</span>
+                                  {item.read === false && <span className="w-1.5 h-1.5 rounded-full bg-coral inline-block shrink-0 ml-1" />}
+                                </div>
+                                <div className="text-ink/60 text-[11px] line-clamp-2">
+                                  {displayMessage}
+                                </div>
+                                <div className="text-[10px] text-ink/40 flex items-center justify-between pt-1">
+                                  <span>{new Date(item.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                                  {(item.type === 'message' || item.conversationId) && (
+                                    <span className="text-[10px] font-bold text-purple hover:underline flex items-center gap-0.5">
+                                      Open Chat →
+                                    </span>
+                                  )}
+                                  {item.type === 'proposal' && (
+                                    <span className="text-[10px] font-bold text-purple hover:underline flex items-center gap-0.5">
+                                      View Proposal →
+                                    </span>
+                                  )}
+                                  {item.type === 'order' && (
+                                    <span className="text-[10px] font-bold text-purple hover:underline flex items-center gap-0.5">
+                                      View Order →
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </div>
-                          <div className="text-ink/60 text-[11px]">
-                            {act.description}
-                          </div>
-                          <div className="text-[10px] text-ink/40">
-                            {new Date(act.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                          </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -1039,13 +2235,23 @@ export default function Dashboard() {
               <MessageSquare size={16} />
             </button>
 
-            <button
-              onClick={() => navigate('/post-gig')}
-              className="btn-primary !py-2 sm:!py-2.5 !px-4 sm:!px-5 !text-xs sm:!text-sm"
-            >
-              <Plus size={15} className="stroke-[2.5]" />
-              <span>{isFreelancer ? 'Create a Service' : 'Post a New Gig'}</span>
-            </button>
+            {isFreelancer ? (
+              <button
+                onClick={() => navigate('/gigs')}
+                className="btn-primary !py-2 sm:!py-2.5 !px-4 sm:!px-5 !text-xs sm:!text-sm inline-flex items-center gap-1.5 sm:gap-2"
+              >
+                <Sparkles size={15} />
+                <span>Browse Gigs</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => navigate('/post-gig')}
+                className="btn-primary !py-2 sm:!py-2.5 !px-4 sm:!px-5 !text-xs sm:!text-sm inline-flex items-center gap-1.5 sm:gap-2"
+              >
+                <Plus size={15} className="stroke-[2.5]" />
+                <span>Post a New Gig</span>
+              </button>
+            )}
 
             <div
               onClick={() => navigate('/profile')}
@@ -1074,10 +2280,27 @@ export default function Dashboard() {
         <div className="flex-1 px-4 sm:px-6 md:px-8 py-8 max-w-[1400px] w-full mx-auto space-y-9">
 
           {/* ====================================================
-              VIEW A: MESSAGES INBOX VIEW
+              VIEW: WORKSPACE VIEW
               ==================================================== */}
-          {activeTab === 'Messages' ? (
-            <div className="flex flex-col h-[calc(100vh-140px)] animate-in fade-in duration-200">
+          {activeTab === 'Workspace' ? (
+            <WorkspaceView
+              orderId={
+                searchParams.get('orderId') ||
+                dashboardData.orders.find((o: any) =>
+                  ['active', 'delivered', 'revision_requested', 'in_review'].includes(o.status)
+                )?._id ||
+                dashboardData.orders[0]?._id
+              }
+              initialOrders={dashboardData.orders}
+              onSelectOrder={(id) => {
+                if (activeTabRef.current === 'Workspace') {
+                  setSearchParams({ tab: 'Workspace', orderId: id });
+                }
+              }}
+              onNavigateTab={(tab) => handleTabClick(tab)}
+            />
+          ) : activeTab === 'Messages' ? (
+            <div className="flex flex-col h-[calc(100vh-140px)]">
               <div className="flex items-center justify-between pb-5">
                 <div>
                   <span className="eyebrow text-purple mb-1 block">DIRECT MESSAGES</span>
@@ -1108,85 +2331,144 @@ export default function Dashboard() {
                   </div>
 
                   <div className="flex-1 overflow-y-auto">
-                    {inboxThreads.map((thread) => (
-                      <button
-                        key={thread.id}
-                        onClick={() => setSelectedInboxThread(thread)}
-                        className={`w-full p-4 flex items-start gap-3.5 border-b border-border/50 text-left transition-colors cursor-pointer ${
-                          selectedInboxThread?.id === thread.id
-                            ? 'bg-purple/5'
-                            : 'hover:bg-soft/60'
-                        }`}
-                      >
-                        <div
-                          className="w-10 h-10 rounded-[14px] flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0"
-                          style={{ backgroundColor: thread.avatarBg }}
+                    {inboxThreads.map((thread) => {
+                      const isSelected = activeInboxThread && (
+                        activeInboxThread.id === thread.id ||
+                        (activeInboxThread.conversationId && String(activeInboxThread.conversationId) === String(thread.conversationId)) ||
+                        (activeInboxThread.participantId && String(activeInboxThread.participantId) === String(thread.participantId))
+                      );
+                      return (
+                        <button
+                          key={thread.id}
+                          onClick={() => handleSelectConversation(thread)}
+                          className={`w-full p-4 flex items-start gap-3.5 border-b border-border/50 text-left transition-colors cursor-pointer ${
+                            isSelected
+                              ? 'bg-purple/5'
+                              : 'hover:bg-soft/60'
+                          }`}
                         >
-                          {thread.initials}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-bold text-sm text-ink truncate">{thread.name}</span>
-                            <span className="text-[11px] text-ink/40 font-medium shrink-0">{thread.time}</span>
+                          <div
+                            className="w-10 h-10 rounded-[14px] flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                            style={{ backgroundColor: thread.avatarBg }}
+                          >
+                            {thread.avatar ? (
+                              <img src={thread.avatar} alt={thread.name} className="w-full h-full object-cover" />
+                            ) : (
+                              thread.initials
+                            )}
                           </div>
-                          <p className="text-xs text-ink/60 truncate mt-0.5">{thread.lastMessage}</p>
-                        </div>
-                      </button>
-                    ))}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`font-bold text-sm truncate ${thread.unread > 0 ? 'text-purple' : 'text-ink'}`}>{thread.name}</span>
+                              <span className="text-[11px] text-ink/40 font-medium shrink-0">{thread.time}</span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2 mt-0.5">
+                              <p className={`text-xs truncate ${thread.unread > 0 ? 'font-bold text-ink' : 'text-ink/60'}`}>{thread.lastMessage}</p>
+                              {thread.unread > 0 && (
+                                <span className="w-5 h-5 rounded-full bg-purple text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                                  {thread.unread}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
                 {/* Right: Message Window */}
                 <div className="hidden sm:flex flex-1 flex-col bg-paper">
-                  {selectedInboxThread ? (
+                  {activeInboxThread ? (
                     <>
                       <div className="p-4 border-b border-border bg-white flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <div
-                            className="w-9 h-9 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink"
-                            style={{ backgroundColor: selectedInboxThread.avatarBg }}
+                            className="w-9 h-9 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink overflow-hidden"
+                            style={{ backgroundColor: activeInboxThread.avatarBg }}
                           >
-                            {selectedInboxThread.initials}
+                            {activeInboxThread.avatar ? (
+                              <img src={activeInboxThread.avatar} alt={activeInboxThread.name} className="w-full h-full object-cover" />
+                            ) : (
+                              activeInboxThread.initials
+                            )}
                           </div>
                           <div>
-                            <h3 className="font-bold text-sm text-ink">{selectedInboxThread.name}</h3>
-                            <p className="text-xs text-ink/50">{selectedInboxThread.role}</p>
+                            <h3 className="font-bold text-sm text-ink">{activeInboxThread.name}</h3>
+                            <p className="text-xs text-ink/50">{activeInboxThread.role}</p>
                           </div>
                         </div>
-                        <button
-                          onClick={() => {
-                            const p = allProposals.find(pr => pr.name === selectedInboxThread.name) || allProposals[0];
-                            if (p) {
-                              setSelectedProposal(p);
-                              setProposalModalOpen(true);
-                            } else {
-                              toast.info('No proposal details attached to this thread.');
+                        <div className="flex items-center gap-2">
+                          {(() => {
+                            const associatedOrder = dashboardData.orders.find((o: any) =>
+                              String(o.client?._id || o.client) === String(activeInboxThread.participantId) ||
+                              String(o.freelancer?._id || o.freelancer) === String(activeInboxThread.participantId) ||
+                              String(o.freelancer?.name) === String(activeInboxThread.name) ||
+                              String(o.client?.name) === String(activeInboxThread.name)
+                            );
+                            if (associatedOrder) {
+                              return (
+                                <button
+                                  onClick={() => handleOpenWorkspace(associatedOrder._id || associatedOrder.rawId)}
+                                  className="btn-primary !py-1.5 !px-3.5 !text-xs inline-flex items-center gap-1.5"
+                                  title="Open Official Order Workspace"
+                                >
+                                  <FolderKanban size={13} />
+                                  <span>Order Workspace</span>
+                                </button>
+                              );
                             }
-                          }}
-                          className="btn-primary !py-1.5 !px-4 !text-xs"
-                        >
-                          View Brief & Proposal
-                        </button>
+                            return null;
+                          })()}
+                          <button
+                            onClick={() => {
+                              const p = allProposals.find(pr => pr.name === activeInboxThread.name) || allProposals[0];
+                              if (p) {
+                                setSelectedProposal(p);
+                                setProposalModalOpen(true);
+                              } else {
+                                toast.info('No proposal details attached to this thread.');
+                              }
+                            }}
+                            className="btn-secondary !py-1.5 !px-3.5 !text-xs"
+                          >
+                            View Proposal
+                          </button>
+                        </div>
                       </div>
 
                       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                        {(chatConversations[selectedInboxThread.id] || []).map((msg) => {
-                          const isMe = msg.sender === 'me';
-                          return (
-                            <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                              <div className={`max-w-[75%] p-3.5 rounded-2xl text-xs leading-relaxed ${
-                                isMe
-                                  ? 'gradient-primary text-white rounded-br-xs'
-                                  : 'bg-white text-ink border border-border rounded-bl-xs shadow-xs'
-                              }`}>
-                                <p>{msg.text}</p>
-                                <span className={`text-[10px] mt-1 block text-right ${isMe ? 'text-white/70' : 'text-ink/40'}`}>
-                                  {msg.time}
-                                </span>
-                              </div>
-                            </div>
+                        {(() => {
+                          const rawList = ((activeInboxThread && (
+                            chatConversations[activeInboxThread.id] ||
+                            chatConversations[activeInboxThread.conversationId] ||
+                            chatConversations[`thread-${activeInboxThread.conversationId}`] ||
+                            chatConversations[`thread-${activeInboxThread.participantId}`]
+                          )) || []);
+
+                          const uniqueMessages = rawList.filter((msg: any, idx: number, arr: any[]) =>
+                            idx === arr.findIndex((m: any) => m.id === msg.id)
                           );
-                        })}
+
+                          return uniqueMessages.map((msg: any) => {
+                            const isMe = msg.sender === 'me';
+                            return (
+                              <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[75%] p-3.5 rounded-2xl text-xs leading-relaxed ${
+                                  isMe
+                                    ? 'gradient-primary text-white rounded-br-xs'
+                                    : 'bg-white text-ink border border-border rounded-bl-xs shadow-xs'
+                                }`}>
+                                  <p>{msg.text}</p>
+                                  <span className={`text-[10px] mt-1 block text-right ${isMe ? 'text-white/70' : 'text-ink/40'}`}>
+                                    {msg.time}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                        <div ref={chatEndRef} />
                       </div>
 
                       <div className="p-4 bg-white border-t border-border">
@@ -1200,8 +2482,8 @@ export default function Dashboard() {
                           <input
                             type="text"
                             value={inboxChatInput}
-                            onChange={(e) => setInboxChatInput(e.target.value)}
-                            placeholder={`Message ${selectedInboxThread.name}...`}
+                            onChange={handleInboxInputChange}
+                            placeholder={`Message ${activeInboxThread.name}...`}
                             className="flex-1 bg-soft border border-border rounded-full px-4 py-2.5 text-xs text-ink focus:outline-none focus:border-purple"
                           />
                           <button
@@ -1216,7 +2498,7 @@ export default function Dashboard() {
                     </>
                   ) : (
                     <div className="flex-1 flex items-center justify-center text-center p-6 text-ink/40 text-xs">
-                      Select a conversation on the left to start messaging
+                      No conversations yet. Start a chat from a proposal or project!
                     </div>
                   )}
                 </div>
@@ -1227,7 +2509,7 @@ export default function Dashboard() {
                 VIEW B: PAYMENTS CONTROL CENTER
                 ==================================================== */
             isFreelancer ? (
-              <div className="space-y-8 animate-in fade-in duration-200">
+              <div className="space-y-8">
                 {/* Freelancer Header */}
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
                   <div>
@@ -1354,10 +2636,14 @@ export default function Dashboard() {
                         >
                           <div className="flex items-start gap-3.5 min-w-0 flex-1">
                             <div
-                              className="w-12 h-12 rounded-[16px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white"
-                              style={{ backgroundColor: item.avatarBg }}
+                              className="w-12 h-12 rounded-[16px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden"
+                              style={{ backgroundColor: item.avatarColor || item.avatarBg }}
                             >
-                              {item.initials}
+                              {item.avatar ? (
+                                <img src={item.avatar} alt={item.freelancerName} className="w-full h-full object-cover" />
+                              ) : (
+                                item.initials
+                              )}
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
@@ -1385,17 +2671,7 @@ export default function Dashboard() {
                             </div>
 
                             <button
-                              onClick={() => {
-                                setSelectedWorkspaceOrder({
-                                  title: item.projectName,
-                                  collaborator: item.freelancerName,
-                                  dueDate: item.dueDate,
-                                  budget: item.amountDue,
-                                  progress: 50,
-                                  status: 'Active Sprint'
-                                });
-                                setWorkspaceModalOpen(true);
-                              }}
+                              onClick={() => handleOpenWorkspace(item.orderId)}
                               className="btn-secondary !py-2 !px-4 !text-xs"
                             >
                               <FileCheck2 size={14} />
@@ -1473,10 +2749,14 @@ export default function Dashboard() {
                               <td className="py-4 px-3">
                                 <div className="flex items-center gap-2.5">
                                   <div
-                                    className="w-8 h-8 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink"
-                                    style={{ backgroundColor: row.avatarBg }}
+                                    className="w-8 h-8 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                                    style={{ backgroundColor: row.avatarColor || row.avatarBg }}
                                   >
-                                    {row.initials}
+                                    {row.avatar ? (
+                                      <img src={row.avatar} alt={row.freelancerName} className="w-full h-full object-cover" />
+                                    ) : (
+                                      row.initials
+                                    )}
                                   </div>
                                   <span className="font-bold text-sm text-ink">{row.freelancerName}</span>
                                 </div>
@@ -1530,7 +2810,7 @@ export default function Dashboard() {
               </div>
             ) : (
               /* HIRER PAYMENTS VIEW - 100% UNCHANGED */
-              <div className="space-y-8 animate-in fade-in duration-200">
+              <div className="space-y-8">
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
                   <div>
@@ -1657,10 +2937,14 @@ export default function Dashboard() {
                         >
                           <div className="flex items-start gap-3.5 min-w-0 flex-1">
                             <div
-                              className="w-12 h-12 rounded-[16px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white"
-                              style={{ backgroundColor: item.avatarBg }}
+                              className="w-12 h-12 rounded-[16px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden"
+                              style={{ backgroundColor: item.avatarColor || item.avatarBg }}
                             >
-                              {item.initials}
+                              {item.avatar ? (
+                                <img src={item.avatar} alt={item.freelancerName} className="w-full h-full object-cover" />
+                              ) : (
+                                item.initials
+                              )}
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
@@ -1689,17 +2973,7 @@ export default function Dashboard() {
 
                             <div className="flex items-center gap-2">
                               <button
-                                onClick={() => {
-                                  setSelectedWorkspaceOrder({
-                                    title: item.projectName,
-                                    collaborator: item.freelancerName,
-                                    dueDate: item.dueDate,
-                                    budget: item.amountDue,
-                                    progress: 100,
-                                    status: 'Deliverables Ready'
-                                  });
-                                  setWorkspaceModalOpen(true);
-                                }}
+                                onClick={() => handleOpenWorkspace(item.orderId)}
                                 className="btn-secondary !py-2 !px-3.5 !text-xs"
                               >
                                 <FileCheck2 size={14} />
@@ -1785,10 +3059,14 @@ export default function Dashboard() {
                               <td className="py-4 px-3">
                                 <div className="flex items-center gap-2.5">
                                   <div
-                                    className="w-8 h-8 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink"
-                                    style={{ backgroundColor: row.avatarBg }}
+                                    className="w-8 h-8 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                                    style={{ backgroundColor: row.avatarColor || row.avatarBg }}
                                   >
-                                    {row.initials}
+                                    {row.avatar ? (
+                                      <img src={row.avatar} alt={row.freelancerName} className="w-full h-full object-cover" />
+                                    ) : (
+                                      row.initials
+                                    )}
                                   </div>
                                   <span className="font-bold text-sm text-ink">{row.freelancerName}</span>
                                 </div>
@@ -1889,7 +3167,7 @@ export default function Dashboard() {
                 VIEW C: REVIEWS & HISTORY HUB
                 ==================================================== */
             isFreelancer ? (
-              <div className="space-y-8 animate-in fade-in duration-200">
+              <div className="space-y-8">
                 {/* Freelancer Header */}
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
                   <div>
@@ -2007,10 +3285,14 @@ export default function Dashboard() {
                               <div className="flex items-start justify-between gap-3 mb-2">
                                 <div className="flex items-center gap-3">
                                   <div
-                                    className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white"
+                                    className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden"
                                     style={{ backgroundColor: rev.from?.avatarColor || getAvatarBg(idx) }}
                                   >
-                                    {authorInitials}
+                                    {rev.from?.avatar ? (
+                                      <img src={rev.from.avatar} alt={authorName} className="w-full h-full object-cover" />
+                                    ) : (
+                                      authorInitials
+                                    )}
                                   </div>
                                   <div>
                                     <h3 className="font-bold text-base text-ink">{authorName}</h3>
@@ -2114,10 +3396,14 @@ export default function Dashboard() {
                               <td className="py-4 px-3">
                                 <div className="flex items-center gap-2">
                                   <div
-                                    className="w-7 h-7 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink"
-                                    style={{ backgroundColor: row.avatarBg }}
+                                    className="w-7 h-7 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                                    style={{ backgroundColor: row.avatarColor || row.avatarBg }}
                                   >
-                                    {row.initials}
+                                    {row.avatar ? (
+                                      <img src={row.avatar} alt={row.freelancerName} className="w-full h-full object-cover" />
+                                    ) : (
+                                      row.initials
+                                    )}
                                   </div>
                                   <span className="font-bold text-ink">{row.freelancerName}</span>
                                 </div>
@@ -2136,17 +3422,7 @@ export default function Dashboard() {
                               </td>
                               <td className="py-4 px-3 text-right">
                                 <button
-                                  onClick={() => {
-                                    setSelectedWorkspaceOrder({
-                                      title: row.title,
-                                      collaborator: row.freelancerName,
-                                      dueDate: row.completionDate,
-                                      budget: row.budget,
-                                      progress: 100,
-                                      status: 'Completed'
-                                    });
-                                    setWorkspaceModalOpen(true);
-                                  }}
+                                  onClick={() => handleOpenWorkspace(row.orderId)}
                                   className="inline-flex items-center gap-1 text-xs font-bold text-purple hover:underline cursor-pointer bg-transparent border-0"
                                 >
                                   <span>View Project</span>
@@ -2163,7 +3439,7 @@ export default function Dashboard() {
               </div>
             ) : (
               /* HIRER REVIEWS VIEW - 100% UNCHANGED */
-              <div className="space-y-8 animate-in fade-in duration-200">
+              <div className="space-y-8">
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
                   <div>
                     <span className="eyebrow text-purple mb-1 block">TRUST & RELATIONSHIP HUB</span>
@@ -2277,10 +3553,14 @@ export default function Dashboard() {
                             <div className="flex items-start justify-between gap-3 mb-2">
                               <div className="flex items-center gap-3">
                                 <div
-                                  className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white"
-                                  style={{ backgroundColor: item.avatarBg }}
+                                  className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden"
+                                  style={{ backgroundColor: item.avatarColor || item.avatarBg }}
                                 >
-                                  {item.initials}
+                                  {item.avatar ? (
+                                    <img src={item.avatar} alt={item.freelancerName} className="w-full h-full object-cover" />
+                                  ) : (
+                                    item.initials
+                                  )}
                                 </div>
                                 <div>
                                   <h3 className="font-bold text-base text-ink">{item.freelancerName}</h3>
@@ -2310,17 +3590,7 @@ export default function Dashboard() {
 
                           <div className="flex items-center justify-end gap-2 pt-3 border-t border-border/40">
                             <button
-                              onClick={() => {
-                                setSelectedWorkspaceOrder({
-                                  title: item.projectName,
-                                  collaborator: item.freelancerName,
-                                  dueDate: item.completionDate,
-                                  budget: item.budget,
-                                  progress: 100,
-                                  status: 'Completed'
-                                });
-                                setWorkspaceModalOpen(true);
-                              }}
+                              onClick={() => handleOpenWorkspace(item.orderId)}
                               className="btn-secondary !py-2 !px-3.5 !text-xs"
                             >
                               <Eye size={13} />
@@ -2408,10 +3678,14 @@ export default function Dashboard() {
                             <td className="py-4 px-3">
                               <div className="flex items-center gap-2">
                                 <div
-                                  className="w-7 h-7 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink"
-                                  style={{ backgroundColor: row.avatarBg }}
+                                  className="w-7 h-7 rounded-lg flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                                  style={{ backgroundColor: row.avatarColor || row.avatarBg }}
                                 >
-                                  {row.initials}
+                                  {row.avatar ? (
+                                    <img src={row.avatar} alt={row.freelancerName} className="w-full h-full object-cover" />
+                                  ) : (
+                                    row.initials
+                                  )}
                                 </div>
                                 <span className="font-bold text-ink">{row.freelancerName}</span>
                               </div>
@@ -2472,14 +3746,26 @@ export default function Dashboard() {
                           <div>
                             <div className="flex items-center gap-3 mb-3">
                               <div
-                                className="w-12 h-12 rounded-[16px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white"
-                                style={{ backgroundColor: f.avatarBg }}
+                                className="w-12 h-12 rounded-[16px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden cursor-pointer"
+                                style={{ backgroundColor: f.avatarColor || f.avatarBg }}
+                                onClick={() => f.id && navigate(`/profile/${f.id}`)}
+                                title="View Profile"
                               >
-                                {f.initials}
+                                {f.avatar ? (
+                                  <img src={f.avatar} alt={f.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  f.initials
+                                )}
                               </div>
                               <div>
                                 <div className="flex items-center gap-1.5">
-                                  <h3 className="font-bold text-base text-ink">{f.name}</h3>
+                                  <h3
+                                    className="font-bold text-base text-ink hover:text-purple hover:underline cursor-pointer transition-colors"
+                                    onClick={() => f.id && navigate(`/profile/${f.id}`)}
+                                    title="View Profile"
+                                  >
+                                    {f.name}
+                                  </h3>
                                   <span className="text-xs font-bold text-amber-600 bg-amber-50 px-1.5 py-0.2 rounded font-sans">
                                     ★ {f.rating}
                                   </span>
@@ -2547,197 +3833,10 @@ export default function Dashboard() {
             )
           ) : activeTab === 'Projects' ? (
             /* ====================================================
-                VIEW D: DEDICATED PROJECTS (MY GIGS / MY SERVICES)
+                VIEW D: DEDICATED PROJECTS (HIRER GIGS ONLY - 100% UNCHANGED)
                 ==================================================== */
-            isFreelancer ? (
-              <div className="space-y-7 animate-in fade-in duration-200">
-                {/* Freelancer Header */}
-                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-                  <div>
-                    <span className="eyebrow text-purple mb-1 block">SERVICE OFFERINGS</span>
-                    <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-ink tracking-tight">
-                      My Services
-                    </h1>
-                    <p className="text-xs sm:text-sm text-ink/50 font-medium mt-1">
-                      Manage your packaged offerings, pricing tiers, and published services available to hirers.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => navigate('/post-gig')}
-                    className="btn-primary !py-2.5 !px-5 !text-xs self-start sm:self-auto gap-2"
-                  >
-                    <Plus size={15} className="stroke-[2.5]" />
-                    <span>Create New Service</span>
-                  </button>
-                </div>
-
-                {/* Filters & Search Toolbar */}
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2">
-                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-                    {(['All', 'open', 'in-progress', 'completed', 'closed'] as const).map((filterKey) => {
-                      const label = filterKey === 'All'
-                        ? `All Services (${displayedGigs.length})`
-                        : filterKey === 'open'
-                          ? `Active (${displayedGigs.filter(g => g.rawStatus === 'open' || g.status === 'Active Brief').length})`
-                          : filterKey === 'in-progress'
-                            ? `In Delivery (${displayedGigs.filter(g => g.rawStatus === 'in-progress' || g.status === 'In Progress').length})`
-                            : filterKey === 'completed'
-                              ? `Completed (${displayedGigs.filter(g => g.rawStatus === 'completed' || g.status === 'Completed').length})`
-                              : `Paused (${displayedGigs.filter(g => g.rawStatus === 'closed' || g.status === 'Closed').length})`;
-                      return (
-                        <button
-                          key={filterKey}
-                          onClick={() => setGigFilter(filterKey)}
-                          className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer border ${
-                            gigFilter === filterKey
-                              ? 'bg-ink text-white border-ink shadow-xs'
-                              : 'bg-white text-ink/60 border-border hover:text-ink hover:border-ink/30'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="relative w-full md:w-64 shrink-0">
-                    <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink/40 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={gigSearch}
-                      onChange={(e) => setGigSearch(e.target.value)}
-                      placeholder="Search your services..."
-                      className="w-full bg-white border border-border rounded-full pl-9 pr-4 py-2 text-xs font-medium text-ink focus:outline-none focus:border-purple shadow-xs"
-                    />
-                  </div>
-                </div>
-
-                {/* Services Content / Table */}
-                <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)]">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="border-b border-border text-[11px] font-bold uppercase tracking-wider text-ink/40">
-                          <th className="pb-3 px-3">Service Title</th>
-                          <th className="pb-3 px-3">Category</th>
-                          <th className="pb-3 px-3">Starting Price</th>
-                          <th className="pb-3 px-3">Orders / Inquiries</th>
-                          <th className="pb-3 px-3">Status</th>
-                          <th className="pb-3 px-3 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/50 text-xs font-medium text-ink">
-                        {dashboardData.loading ? (
-                          <tr>
-                            <td colSpan={6} className="py-12 text-center text-ink/40">
-                              <div className="flex items-center justify-center gap-2">
-                                <Loader2 size={18} className="animate-spin text-purple" />
-                                <span>Loading your services...</span>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : filteredProjectsGigs.length === 0 ? (
-                          <tr>
-                            <td colSpan={6} className="py-12 text-center text-ink/50">
-                              <div className="max-w-sm mx-auto space-y-3">
-                                <Sparkles size={32} className="mx-auto text-purple/40" />
-                                <p className="font-bold text-sm text-ink">No services created yet</p>
-                                <p className="text-xs text-ink/50">
-                                  {gigSearch || gigFilter !== 'All'
-                                    ? 'Try changing your search keywords or filter.'
-                                    : 'Create a packaged service to showcase your specialized skills to prospective hirers.'}
-                                </p>
-                                <button
-                                  onClick={() => navigate('/post-gig')}
-                                  className="btn-primary !py-2 !px-4 !text-xs mx-auto mt-2 inline-flex items-center gap-1.5"
-                                >
-                                  <Plus size={14} />
-                                  <span>Create Your First Service</span>
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ) : (
-                          filteredProjectsGigs.map((gig) => (
-                            <tr key={gig.id} className="hover:bg-soft/50 transition-colors">
-                              <td className="py-4 px-3">
-                                <div
-                                  className="font-bold text-sm text-ink hover:text-purple transition-colors cursor-pointer"
-                                  onClick={() => navigate(`/gigs/${gig.id || gig.rawId}`)}
-                                >
-                                  {gig.title}
-                                </div>
-                                <span className="text-[11px] text-ink/40">Created {gig.postedDate}</span>
-                              </td>
-                              <td className="py-4 px-3 text-ink/70">
-                                {gig.category}
-                              </td>
-                              <td className="py-4 px-3 font-display font-bold text-sm text-ink">
-                                {gig.budget}
-                              </td>
-                              <td className="py-4 px-3">
-                                <span className="font-bold text-ink/80 bg-soft px-2.5 py-1 rounded-full text-xs inline-flex items-center gap-1">
-                                  <span>{gig.proposalsCount} inquiries</span>
-                                </span>
-                              </td>
-                              <td className="py-4 px-3">
-                                <span className={`inline-flex items-center gap-1 font-bold text-xs px-2.5 py-0.5 rounded-full border ${
-                                  gig.rawStatus === 'open' || gig.status === 'Active Brief'
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200/50'
-                                    : gig.rawStatus === 'in-progress' || gig.status === 'In Progress'
-                                      ? 'bg-purple/10 text-purple border-purple/20'
-                                      : gig.rawStatus === 'completed' || gig.status === 'Completed'
-                                        ? 'bg-cyan/15 text-cyan border-cyan/20'
-                                        : 'bg-gray-100 text-gray-600 border-gray-200'
-                                }`}>
-                                  <span className={`w-1.5 h-1.5 rounded-full ${
-                                    gig.rawStatus === 'open' || gig.status === 'Active Brief'
-                                      ? 'bg-emerald-500'
-                                      : gig.rawStatus === 'in-progress' || gig.status === 'In Progress'
-                                        ? 'bg-purple'
-                                        : gig.rawStatus === 'completed' || gig.status === 'Completed'
-                                          ? 'bg-cyan'
-                                          : 'bg-gray-400'
-                                  }`} />
-                                  {gig.rawStatus === 'open' || gig.status === 'Active Brief' ? 'Active Offering' : gig.status}
-                                </span>
-                              </td>
-                              <td className="py-4 px-3 text-right">
-                                <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    onClick={() => navigate(`/gigs/${gig.id || gig.rawId}`)}
-                                    className="p-2 rounded-xl text-ink/60 hover:text-purple hover:bg-purple/10 transition-colors cursor-pointer border-0 bg-transparent"
-                                    title="View Service"
-                                  >
-                                    <Eye size={15} />
-                                  </button>
-                                  <button
-                                    onClick={() => handleOpenEditGig(gig)}
-                                    className="p-2 rounded-xl text-ink/60 hover:text-ink hover:bg-soft transition-colors cursor-pointer border-0 bg-transparent"
-                                    title="Edit Service"
-                                  >
-                                    <Edit3 size={15} />
-                                  </button>
-                                  <button
-                                    onClick={() => handleDeleteGig(gig.id || gig.rawId)}
-                                    className="p-2 rounded-xl text-ink/40 hover:text-coral hover:bg-coral/10 transition-colors cursor-pointer border-0 bg-transparent"
-                                    title="Delete Service"
-                                  >
-                                    <Trash2 size={15} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* HIRER PROJECTS VIEW - 100% UNCHANGED */
-              <div className="space-y-7 animate-in fade-in duration-200">
+            /* HIRER PROJECTS VIEW - 100% UNCHANGED */
+            <div className="space-y-7">
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                   <div>
@@ -2926,13 +4025,12 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
-            )
           ) : activeTab === 'Proposals' ? (
             /* ====================================================
                 VIEW E: DEDICATED PROPOSALS & APPLICANTS BOARD / APPLICATIONS
                 ==================================================== */
             isFreelancer ? (
-              <div className="space-y-7 animate-in fade-in duration-200">
+              <div className="space-y-7">
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                   <div>
                     <span className="eyebrow text-purple mb-1 block">OPPORTUNITY TRACKING</span>
@@ -3023,10 +4121,16 @@ export default function Dashboard() {
                       >
                         <div className="flex items-start gap-4 min-w-0 flex-1">
                           <div
-                            className="w-13 h-13 rounded-[18px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white"
-                            style={{ backgroundColor: proposal.avatarBg }}
+                            className="w-13 h-13 rounded-[18px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                            style={{ backgroundColor: proposal.avatarColor || proposal.avatarBg }}
+                            onClick={() => proposal.clientId && navigate(`/profile/${proposal.clientId}`)}
+                            title="View Hirer Profile"
                           >
-                            {proposal.initials}
+                            {proposal.avatar ? (
+                              <img src={proposal.avatar} alt={proposal.name} className="w-full h-full object-cover" />
+                            ) : (
+                              proposal.initials
+                            )}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2 mb-1">
@@ -3048,7 +4152,11 @@ export default function Dashboard() {
                             </div>
 
                             <p className="text-xs text-ink/70 font-semibold">
-                              Hirer: <strong className="text-ink">{proposal.name}</strong>
+                              Hirer: <strong
+                                onClick={() => proposal.clientId && navigate(`/profile/${proposal.clientId}`)}
+                                className="text-ink hover:text-purple hover:underline cursor-pointer transition-colors"
+                                title="View Hirer Profile"
+                              >{proposal.name}</strong>
                             </p>
 
                             <p className="text-xs text-ink/60 font-medium mt-2 line-clamp-2 italic leading-relaxed bg-soft/50 p-3 rounded-xl border border-border/40">
@@ -3110,7 +4218,7 @@ export default function Dashboard() {
               </div>
             ) : (
               /* HIRER PROPOSALS VIEW - 100% UNCHANGED */
-              <div className="space-y-7 animate-in fade-in duration-200">
+              <div className="space-y-7">
                 <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                   <div>
                     <span className="eyebrow text-purple mb-1 block">TALENT APPLICATIONS</span>
@@ -3187,14 +4295,24 @@ export default function Dashboard() {
                       >
                         <div className="flex items-start gap-4 min-w-0 flex-1">
                           <div
-                            className="w-13 h-13 rounded-[18px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white"
-                            style={{ backgroundColor: proposal.avatarBg }}
+                            className="w-13 h-13 rounded-[18px] flex items-center justify-center font-clash font-bold text-base text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                            style={{ backgroundColor: proposal.avatarColor || proposal.avatarBg }}
+                            onClick={() => proposal.freelancerId && navigate(`/profile/${proposal.freelancerId}`)}
+                            title="View Freelancer Profile"
                           >
-                            {proposal.initials}
+                            {proposal.avatar ? (
+                              <img src={proposal.avatar} alt={proposal.name} className="w-full h-full object-cover" />
+                            ) : (
+                              proposal.initials
+                            )}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2 mb-1">
-                              <h3 className="font-bold text-base text-ink group-hover:text-purple transition-colors">
+                              <h3
+                                onClick={() => proposal.freelancerId && navigate(`/profile/${proposal.freelancerId}`)}
+                                className="font-bold text-base text-ink group-hover:text-purple hover:underline cursor-pointer transition-colors"
+                                title="View Freelancer Profile"
+                              >
                                 {proposal.name}
                               </h3>
                               <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full uppercase border ${
@@ -3255,16 +4373,23 @@ export default function Dashboard() {
                               <MessageSquare size={14} />
                               <span className="hidden sm:inline">Chat</span>
                             </button>
-                            <button
-                              onClick={() => {
-                                setSelectedProposal(proposal);
-                                setProposalModalOpen(true);
-                              }}
-                              className="btn-primary !py-2 !px-4 !text-xs"
-                            >
-                              <span>Review & Hire</span>
-                              <ChevronRight size={14} />
-                            </button>
+                            {proposal.status === 'accepted' ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-4 py-2 rounded-full border border-emerald-200/50">
+                                <CheckCircle2 size={14} className="text-emerald-600" />
+                                Hired ✓
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setSelectedProposal(proposal);
+                                  setProposalModalOpen(true);
+                                }}
+                                className="btn-primary !py-2 !px-4 !text-xs"
+                              >
+                                <span>Review & Hire</span>
+                                <ChevronRight size={14} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3277,7 +4402,7 @@ export default function Dashboard() {
             /* ====================================================
                 VIEW F: DEDICATED ORDERS & CONTRACT MANAGEMENT
                 ==================================================== */
-            <div className="space-y-7 animate-in fade-in duration-200">
+            <div className="space-y-7">
               <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
                 <div>
                   <span className="eyebrow text-purple mb-1 block">CONTRACT & SPRINT TRACKING</span>
@@ -3297,13 +4422,15 @@ export default function Dashboard() {
               {/* Filters & Search Toolbar */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pt-2">
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-                  {(['All', 'active', 'in_review', 'completed', 'cancelled'] as const).map((filterKey) => {
+                  {(['All', 'active', 'delivered', 'revision_requested', 'completed', 'cancelled'] as const).map((filterKey) => {
                     const label = filterKey === 'All'
                       ? `All Contracts (${displayedOrders.length})`
                       : filterKey === 'active'
                         ? `Active (${displayedOrders.filter(o => o.rawStatus === 'active' || o.status === 'active').length})`
-                        : filterKey === 'in_review'
-                          ? `In Review (${displayedOrders.filter(o => o.rawStatus === 'in_review' || o.status === 'in_review').length})`
+                        : filterKey === 'delivered'
+                          ? `Delivered (${displayedOrders.filter(o => o.rawStatus === 'delivered' || o.status === 'delivered').length})`
+                        : filterKey === 'revision_requested'
+                          ? `Revision Req (${displayedOrders.filter(o => o.rawStatus === 'revision_requested' || o.status === 'revision_requested').length})`
                           : filterKey === 'completed'
                             ? `Completed (${displayedOrders.filter(o => o.rawStatus === 'completed' || o.status === 'completed').length})`
                             : `Cancelled (${displayedOrders.filter(o => o.rawStatus === 'cancelled' || o.status === 'cancelled').length})`;
@@ -3362,10 +4489,14 @@ export default function Dashboard() {
                         <div className="flex items-center justify-between gap-2 mb-3">
                           <div className="flex items-center gap-2.5">
                             <div
-                              className="w-10 h-10 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 shadow-xs"
-                              style={{ backgroundColor: order.avatarBg }}
+                              className="w-10 h-10 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 shadow-xs overflow-hidden"
+                              style={{ backgroundColor: order.avatarColor || order.avatarBg }}
                             >
-                              {order.initials}
+                              {order.avatar ? (
+                                <img src={order.avatar} alt={order.freelancerName} className="w-full h-full object-cover" />
+                              ) : (
+                                order.initials
+                              )}
                             </div>
                             <div>
                               <h4 className="font-bold text-sm text-ink">{order.freelancerName}</h4>
@@ -3414,45 +4545,21 @@ export default function Dashboard() {
                       </div>
 
                       <div className="pt-3 border-t border-border/40 space-y-2">
-                        {order.isUnpaid ? (
-                          <button
-                            onClick={() => {
-                              const payItem = pendingPaymentsList.find(p => p.orderId === order.id || p.orderId === order.rawId);
-                              if (payItem) {
-                                handlePayNow(payItem);
-                              } else {
-                                toast.success(`Payment of ${order.budget} approved for ${order.freelancerName}!`);
-                              }
-                            }}
-                            className="w-full btn-primary !py-2.5 !text-xs justify-center"
-                          >
-                            <ShieldCheck size={14} />
-                            <span>Release Payment & Approve</span>
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => navigate(`/workspace?id=${order.id}`)}
-                            className="w-full btn-secondary !py-2 !text-xs justify-center"
-                          >
-                            <FolderKanban size={13} />
-                            <span>Open Workspace</span>
-                          </button>
-                        )}
+                        <button
+                          onClick={() => handleOpenWorkspace(order.rawId || order.id)}
+                          className="w-full btn-primary !py-2.5 !text-xs justify-center"
+                        >
+                          <FolderKanban size={14} />
+                          <span>Open Workspace</span>
+                        </button>
                         <button
                           onClick={() => {
-                            const targetProp = allProposals.find(p => p.name.includes(order.freelancerName.split(' ')[0])) || {
-                              name: order.freelancerName,
-                              role: order.freelancerRole,
-                              avatarBg: order.avatarBg,
-                              initials: order.initials,
-                              title: order.projectTitle,
-                              coverLetter: ''
-                            };
-                            handleOpenDirectChat(targetProp);
+                            handleOpenWorkspace(order.rawId || order.id);
                           }}
-                          className="w-full text-center text-xs font-semibold text-ink/60 hover:text-purple transition-colors py-1 cursor-pointer bg-transparent border-0"
+                          className="w-full text-center text-xs font-semibold text-ink/60 hover:text-purple transition-colors py-1 cursor-pointer bg-transparent border-0 flex items-center justify-center gap-1"
                         >
-                          Message Creator →
+                          <MessageSquare size={12} />
+                          <span>Order Chat →</span>
                         </button>
                       </div>
                     </div>
@@ -3486,23 +4593,23 @@ export default function Dashboard() {
 
                   {/* 4 TOP KPI CARDS */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-                    {/* 1. Active Services */}
+                    {/* 1. Active Applications */}
                     <div
-                      onClick={() => handleTabClick('Projects')}
+                      onClick={() => handleTabClick('Proposals')}
                       className="bg-white rounded-[24px] p-5 border border-border/70 shadow-[0_4px_20px_rgba(0,0,0,0.03)] flex flex-col justify-between hover-lift transition-all cursor-pointer group"
                     >
                       <div className="flex items-center justify-between mb-3">
-                        <span className="eyebrow text-ink/50">Active Services</span>
+                        <span className="eyebrow text-ink/50">Active Applications</span>
                         <div className="w-8 h-8 rounded-xl bg-purple/15 flex items-center justify-center text-purple group-hover:scale-110 transition-transform">
-                          <Sparkles size={16} />
+                          <FileText size={16} />
                         </div>
                       </div>
                       <div>
                         <div className="font-display text-3xl font-extrabold text-ink leading-none mb-2">
-                          {dashboardData.gigs.length.toString().padStart(2, '0')}
+                          {allProposals.length.toString().padStart(2, '0')}
                         </div>
                         <div className="flex items-center gap-1 text-xs font-semibold text-purple">
-                          <span>{dashboardData.gigs.filter(g => g.status === 'open').length} Offering Live →</span>
+                          <span>{allProposals.filter((p: any) => p.status === 'pending').length} Pending Review →</span>
                         </div>
                       </div>
                     </div>
@@ -3577,21 +4684,21 @@ export default function Dashboard() {
                 <section aria-label="Quick Actions">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
                     <div
-                      onClick={() => navigate('/post-gig')}
+                      onClick={() => handleTabClick('Proposals')}
                       className="bg-white rounded-[24px] p-5 border border-border/70 hover:border-purple/40 shadow-[0_4px_20px_rgba(0,0,0,0.03)] hover:shadow-[0_8px_30px_rgba(124,58,237,0.08)] transition-all duration-200 cursor-pointer flex flex-col justify-between hover-lift group"
                     >
                       <div className="flex items-center justify-between mb-4">
                         <div className="w-11 h-11 rounded-2xl bg-purple/10 text-purple flex items-center justify-center group-hover:scale-110 transition-transform">
-                          <Plus size={20} className="stroke-[2.5]" />
+                          <FileText size={20} />
                         </div>
                         <ArrowUpRight size={18} className="text-ink/30 group-hover:text-purple group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" />
                       </div>
                       <div>
                         <h3 className="font-display font-bold text-lg text-ink mb-1 group-hover:text-purple transition-colors">
-                          Create a Service
+                          Track Applications
                         </h3>
                         <p className="text-xs text-ink/55 font-medium leading-relaxed">
-                          Package your skills and publish an offering to attract clients.
+                          Review your submitted pitches, client bids, and application status.
                         </p>
                       </div>
                     </div>
@@ -3690,7 +4797,7 @@ export default function Dashboard() {
                           displayedOrders.slice(0, 3).map((order) => (
                             <div
                               key={order.id}
-                              onClick={() => navigate(`/workspace?id=${order.id}`)}
+                              onClick={() => handleOpenWorkspace(order.rawId || order.id)}
                               className="p-4 rounded-2xl bg-soft/60 hover:bg-soft hover:border-purple/20 transition-all border border-border/40 space-y-3 cursor-pointer"
                             >
                               <div className="flex items-center justify-between gap-2">
@@ -3763,10 +4870,14 @@ export default function Dashboard() {
                             >
                               <div className="flex items-center gap-3 min-w-0">
                                 <div
-                                  className="w-9 h-9 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0"
-                                  style={{ backgroundColor: prop.avatarBg }}
+                                  className="w-9 h-9 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                                  style={{ backgroundColor: prop.avatarColor || prop.avatarBg }}
                                 >
-                                  {prop.initials}
+                                  {prop.avatar ? (
+                                    <img src={prop.avatar} alt={prop.name} className="w-full h-full object-cover" />
+                                  ) : (
+                                    prop.initials
+                                  )}
                                 </div>
                                 <div className="min-w-0">
                                   <h4 className="font-bold text-sm text-ink truncate">{prop.title}</h4>
@@ -4140,10 +5251,14 @@ export default function Dashboard() {
                             >
                               <div className="flex items-center gap-3 min-w-0">
                                 <div
-                                  className="w-9 h-9 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0"
-                                  style={{ backgroundColor: prop.avatarBg }}
+                                  className="w-9 h-9 rounded-xl flex items-center justify-center font-clash font-bold text-xs text-ink shrink-0 overflow-hidden"
+                                  style={{ backgroundColor: prop.avatarColor || prop.avatarBg }}
                                 >
-                                  {prop.initials}
+                                  {prop.avatar ? (
+                                    <img src={prop.avatar} alt={prop.name} className="w-full h-full object-cover" />
+                                  ) : (
+                                    prop.initials
+                                  )}
                                 </div>
                                 <div className="min-w-0">
                                   <h4 className="font-bold text-sm text-ink truncate">{prop.name}</h4>
@@ -4214,7 +5329,7 @@ export default function Dashboard() {
                           <div className="flex items-center justify-between pt-2 border-t border-border/40 text-xs">
                             <span className="font-bold text-ink">{order.budget}</span>
                             <button
-                              onClick={() => navigate(`/workspace?id=${order.id}`)}
+                              onClick={() => handleOpenWorkspace(order.rawId || order.id)}
                               className="text-purple font-bold hover:underline cursor-pointer bg-transparent border-0"
                             >
                               Workspace →
@@ -4293,10 +5408,21 @@ export default function Dashboard() {
                 <div className="bg-purple/5 border border-purple/15 rounded-[22px] p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <div
-                      className="w-14 h-14 rounded-[18px] flex items-center justify-center font-clash font-bold text-xl text-ink shrink-0 shadow-sm ring-4 ring-white"
-                      style={{ backgroundColor: selectedProposal.avatarBg }}
+                      className="w-14 h-14 rounded-[18px] flex items-center justify-center font-clash font-bold text-xl text-ink shrink-0 shadow-sm ring-4 ring-white overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                      style={{ backgroundColor: selectedProposal.avatarColor || selectedProposal.avatarBg }}
+                      onClick={() => {
+                        if (selectedProposal.clientId) {
+                          setProposalModalOpen(false);
+                          navigate(`/profile/${selectedProposal.clientId}`);
+                        }
+                      }}
+                      title="View Hirer Profile"
                     >
-                      {selectedProposal.initials}
+                      {selectedProposal.avatar ? (
+                        <img src={selectedProposal.avatar} alt={selectedProposal.name} className="w-full h-full object-cover" />
+                      ) : (
+                        selectedProposal.initials
+                      )}
                     </div>
                     <div>
                       <h3 className="font-display text-2xl sm:text-3xl font-bold text-ink tracking-tight leading-tight">
@@ -4304,7 +5430,18 @@ export default function Dashboard() {
                       </h3>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-ink/80 mt-1.5 font-medium">
                         <span>Hirer / Client:</span>
-                        <span className="font-bold text-ink text-sm">{selectedProposal.name}</span>
+                        <span
+                          onClick={() => {
+                            if (selectedProposal.clientId) {
+                              setProposalModalOpen(false);
+                              navigate(`/profile/${selectedProposal.clientId}`);
+                            }
+                          }}
+                          className="font-bold text-ink text-sm hover:text-purple hover:underline cursor-pointer transition-colors"
+                          title="View Hirer Profile"
+                        >
+                          {selectedProposal.name}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -4391,17 +5528,39 @@ export default function Dashboard() {
                 <div className="bg-purple/5 border border-purple/15 rounded-[22px] p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <div
-                      className="w-14 h-14 rounded-[18px] flex items-center justify-center font-clash font-bold text-xl text-ink shrink-0 shadow-sm ring-4 ring-white"
-                      style={{ backgroundColor: selectedProposal.avatarBg }}
+                      className="w-14 h-14 rounded-[18px] flex items-center justify-center font-clash font-bold text-xl text-ink shrink-0 shadow-sm ring-4 ring-white overflow-hidden cursor-pointer hover:scale-105 transition-transform"
+                      style={{ backgroundColor: selectedProposal.avatarColor || selectedProposal.avatarBg }}
+                      onClick={() => {
+                        if (selectedProposal.freelancerId) {
+                          setProposalModalOpen(false);
+                          navigate(`/profile/${selectedProposal.freelancerId}`);
+                        }
+                      }}
+                      title="View Freelancer Profile"
                     >
-                      {selectedProposal.initials}
+                      {selectedProposal.avatar ? (
+                        <img src={selectedProposal.avatar} alt={selectedProposal.name} className="w-full h-full object-cover" />
+                      ) : (
+                        selectedProposal.initials
+                      )}
                     </div>
                     <div>
                       <h3 className="font-display text-2xl sm:text-3xl font-bold text-ink tracking-tight leading-tight">
                         {selectedProposal.title}
                       </h3>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-ink/80 mt-1.5 font-medium">
-                        <span className="font-bold text-ink text-sm">{selectedProposal.name}</span>
+                        <span
+                          onClick={() => {
+                            if (selectedProposal.freelancerId) {
+                              setProposalModalOpen(false);
+                              navigate(`/profile/${selectedProposal.freelancerId}`);
+                            }
+                          }}
+                          className="font-bold text-ink text-sm hover:text-purple hover:underline cursor-pointer transition-colors"
+                          title="View Freelancer Profile"
+                        >
+                          {selectedProposal.name}
+                        </span>
                         <span>·</span>
                         <span className="text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/50">
                           Verified Applicant
@@ -4496,26 +5655,40 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex flex-col-reverse sm:flex-row items-center justify-between gap-3 pt-5 border-t border-border">
-                  <div className="text-xs text-ink/50 font-medium">
-                    Need clarification before committing? Start a quick chat.
-                  </div>
-                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
-                    <button
-                      onClick={() => handleOpenDirectChat(selectedProposal)}
-                      className="btn-secondary w-full sm:w-auto !py-2.5 !px-5"
-                    >
-                      <MessageSquare size={16} />
-                      <span>Message First</span>
-                    </button>
-                    <button
-                      onClick={() => handleAcceptProposal(selectedProposal.id)}
-                      disabled={acceptingId === selectedProposal.id}
-                      className="btn-primary w-full sm:w-auto !py-2.5 !px-6 disabled:opacity-50"
-                    >
-                      <ShieldCheck size={16} />
-                      <span>{acceptingId === selectedProposal.id ? 'Securing Escrow...' : 'Accept Proposal & Hire'}</span>
-                    </button>
-                  </div>
+                  {selectedProposal.status === 'accepted' ? (
+                    <>
+                      <div className="text-xs text-ink/50 font-medium">
+                        This proposal has been accepted and a work order has been created.
+                      </div>
+                      <div className="inline-flex items-center gap-2 text-sm font-bold text-emerald-700 bg-emerald-50 px-5 py-2.5 rounded-full border border-emerald-200/50">
+                        <CheckCircle2 size={16} className="text-emerald-600" />
+                        <span>Already Hired</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="text-xs text-ink/50 font-medium">
+                        Need clarification before committing? Start a quick chat.
+                      </div>
+                      <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                        <button
+                          onClick={() => handleOpenDirectChat(selectedProposal)}
+                          className="btn-secondary w-full sm:w-auto !py-2.5 !px-5"
+                        >
+                          <MessageSquare size={16} />
+                          <span>Message First</span>
+                        </button>
+                        <button
+                          onClick={() => handleAcceptProposal(selectedProposal.id)}
+                          disabled={acceptingId === selectedProposal.id}
+                          className="btn-primary w-full sm:w-auto !py-2.5 !px-6 disabled:opacity-50"
+                        >
+                          <ShieldCheck size={16} />
+                          <span>{acceptingId === selectedProposal.id ? 'Securing Escrow...' : 'Accept Proposal & Hire'}</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )
@@ -4533,10 +5706,14 @@ export default function Dashboard() {
               <div className="p-4 sm:p-5 border-b border-border bg-paper flex items-center justify-between gap-3 shrink-0">
                 <div className="flex items-center gap-3 min-w-0">
                   <div
-                    className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white"
-                    style={{ backgroundColor: activeChatFreelancer.avatarBg }}
+                    className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden"
+                    style={{ backgroundColor: activeChatFreelancer.avatarColor || activeChatFreelancer.avatarBg }}
                   >
-                    {activeChatFreelancer.initials}
+                    {activeChatFreelancer.avatar ? (
+                      <img src={activeChatFreelancer.avatar} alt={activeChatFreelancer.name} className="w-full h-full object-cover" />
+                    ) : (
+                      activeChatFreelancer.initials
+                    )}
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
@@ -4557,14 +5734,21 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => handleAcceptProposal(activeChatFreelancer.id)}
-                    disabled={acceptingId === activeChatFreelancer.id}
-                    className="btn-primary !py-2 !px-4 !text-xs disabled:opacity-50"
-                  >
-                    <ShieldCheck size={13} />
-                    <span>Hire Candidate</span>
-                  </button>
+                  {activeChatFreelancer.status === 'accepted' ? (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-4 py-2 rounded-full border border-emerald-200/50">
+                      <CheckCircle2 size={13} className="text-emerald-600" />
+                      Hired ✓
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleAcceptProposal(activeChatFreelancer.id)}
+                      disabled={acceptingId === activeChatFreelancer.id}
+                      className="btn-primary !py-2 !px-4 !text-xs disabled:opacity-50"
+                    >
+                      <ShieldCheck size={13} />
+                      <span>Hire Candidate</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -4591,10 +5775,14 @@ export default function Dashboard() {
                       <div className="flex items-end gap-2 max-w-[85%] sm:max-w-[75%]">
                         {!isMe && (
                           <div
-                            className="w-7 h-7 rounded-[9px] flex items-center justify-center font-clash font-bold text-[10px] text-ink shrink-0 mb-1"
-                            style={{ backgroundColor: activeChatFreelancer.avatarBg }}
+                            className="w-7 h-7 rounded-[9px] flex items-center justify-center font-clash font-bold text-[10px] text-ink shrink-0 mb-1 overflow-hidden"
+                            style={{ backgroundColor: activeChatFreelancer.avatarColor || activeChatFreelancer.avatarBg }}
                           >
-                            {activeChatFreelancer.initials}
+                            {activeChatFreelancer.avatar ? (
+                              <img src={activeChatFreelancer.avatar} alt={activeChatFreelancer.name} className="w-full h-full object-cover" />
+                            ) : (
+                              activeChatFreelancer.initials
+                            )}
                           </div>
                         )}
                         <div
@@ -4621,10 +5809,14 @@ export default function Dashboard() {
                 {isTyping && (
                   <div className="flex items-center gap-2 text-xs text-ink/50 italic py-1">
                     <div
-                      className="w-6 h-6 rounded-[8px] flex items-center justify-center font-clash font-bold text-[10px] text-ink shrink-0"
-                      style={{ backgroundColor: activeChatFreelancer.avatarBg }}
+                      className="w-6 h-6 rounded-[8px] flex items-center justify-center font-clash font-bold text-[10px] text-ink shrink-0 overflow-hidden"
+                      style={{ backgroundColor: activeChatFreelancer.avatarColor || activeChatFreelancer.avatarBg }}
                     >
-                      {activeChatFreelancer.initials}
+                      {activeChatFreelancer.avatar ? (
+                        <img src={activeChatFreelancer.avatar} alt={activeChatFreelancer.name} className="w-full h-full object-cover" />
+                      ) : (
+                        activeChatFreelancer.initials
+                      )}
                     </div>
                     <span>{activeChatFreelancer.name} is typing...</span>
                   </div>
@@ -4685,94 +5877,6 @@ export default function Dashboard() {
       </Dialog>
 
       {/* ====================================================
-          MODAL: WORKSPACE & COLLABORATION
-          ==================================================== */}
-      <Dialog open={workspaceModalOpen} onOpenChange={setWorkspaceModalOpen}>
-        <DialogContent className="max-w-3xl bg-white rounded-[28px] p-6 border border-border shadow-2xl">
-          <DialogHeader>
-            <div className="flex items-center justify-between">
-              <span className="text-purple font-bold text-xs uppercase tracking-wider">
-                Employer Live Workspace
-              </span>
-              <span className="bg-purple/10 text-purple font-bold text-xs px-2.5 py-0.5 rounded-full uppercase">
-                {selectedWorkspaceOrder?.status || 'Active Sprint'}
-              </span>
-            </div>
-            <DialogTitle className="font-display text-2xl font-bold text-ink mt-1">
-              {selectedWorkspaceOrder?.title || 'Aurora Brand System'}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-ink/60">
-              Collaborator: {selectedWorkspaceOrder?.collaborator || 'Studio Morrow'} · Due: {selectedWorkspaceOrder?.dueDate || 'Aug 28'} · Total Budget: {selectedWorkspaceOrder?.budget || '₹8,000'}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 mt-2">
-            <div className="md:col-span-5 bg-soft rounded-[20px] p-4 space-y-3">
-              <h4 className="font-bold text-xs uppercase tracking-wider text-ink">
-                Milestone Progress
-              </h4>
-              <div className="space-y-2 text-xs">
-                <div className="p-2.5 rounded-xl bg-white border border-border flex items-center justify-between">
-                  <div>
-                    <div className="font-bold">1. Creative Direction & Moodboard</div>
-                    <div className="text-[11px] text-emerald-600 font-medium">Approved & Released</div>
-                  </div>
-                  <CheckCircle2 size={16} className="text-emerald-500" />
-                </div>
-                <div className="p-2.5 rounded-xl bg-white border border-purple/30 ring-1 ring-purple/20 flex items-center justify-between">
-                  <div>
-                    <div className="font-bold">2. Design System Components</div>
-                    <div className="text-[11px] text-purple font-medium">Under Review (Friday)</div>
-                  </div>
-                  <Clock size={16} className="text-purple" />
-                </div>
-                <div className="p-2.5 rounded-xl bg-white/60 border border-border flex items-center justify-between opacity-70">
-                  <div>
-                    <div className="font-bold">3. Final Delivery & Source Files</div>
-                    <div className="text-[11px] text-ink/40">Upcoming</div>
-                  </div>
-                  <div className="w-4 h-4 rounded-full border border-border" />
-                </div>
-              </div>
-            </div>
-
-            <div className="md:col-span-7 border border-border rounded-[20px] p-4 flex flex-col justify-between bg-paper">
-              <div>
-                <h4 className="font-bold text-xs uppercase tracking-wider text-ink mb-3 flex items-center gap-1.5">
-                  <MessageSquare size={14} className="text-purple" />
-                  <span>Workspace Channel</span>
-                </h4>
-                <div className="space-y-2.5 text-xs mb-4">
-                  <div className="bg-white p-3 rounded-2xl rounded-tl-sm border border-border max-w-[85%] shadow-xs">
-                    <span className="font-bold text-[11px] text-purple block mb-0.5">Studio Morrow</span>
-                    We've uploaded the draft vector components to the shared Figma library. Review is open for Milestone 2!
-                  </div>
-                  <div className="gradient-primary text-white p-3 rounded-2xl rounded-tr-sm ml-auto max-w-[85%] shadow-xs">
-                    <span className="font-bold text-[11px] text-white/80 block mb-0.5">You ({displayName})</span>
-                    Looks incredible. The custom typography pairing feels bold and distinct. Reviewing with team now!
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex gap-2 pt-2 border-t border-border">
-                <input
-                  type="text"
-                  placeholder="Type a message or share link..."
-                  className="flex-1 bg-white border border-border rounded-full px-4 py-2 text-xs focus:outline-none focus:border-purple"
-                />
-                <button
-                  onClick={() => toast.success('Message sent to workspace channel')}
-                  className="btn-primary !p-2 !rounded-full"
-                >
-                  <Send size={14} />
-                </button>
-              </div>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* ====================================================
           MODAL: VIEW REVIEW DETAIL MODAL
           ==================================================== */}
       <Dialog open={reviewDetailModalOpen} onOpenChange={setReviewDetailModalOpen}>
@@ -4798,10 +5902,14 @@ export default function Dashboard() {
               {/* Freelancer Header */}
               <div className="flex items-center gap-3 p-3.5 bg-soft rounded-2xl border border-border/70">
                 <div
-                  className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white"
-                  style={{ backgroundColor: selectedReviewDetail.avatarBg }}
+                  className="w-11 h-11 rounded-[14px] flex items-center justify-center font-clash font-bold text-sm text-ink shrink-0 shadow-xs ring-2 ring-white overflow-hidden"
+                  style={{ backgroundColor: selectedReviewDetail.avatarColor || selectedReviewDetail.avatarBg }}
                 >
-                  {selectedReviewDetail.initials}
+                  {selectedReviewDetail.avatar ? (
+                    <img src={selectedReviewDetail.avatar} alt={selectedReviewDetail.freelancerName} className="w-full h-full object-cover" />
+                  ) : (
+                    selectedReviewDetail.initials
+                  )}
                 </div>
                 <div>
                   <h4 className="font-bold text-sm text-ink">{selectedReviewDetail.freelancerName}</h4>
@@ -4845,7 +5953,7 @@ export default function Dashboard() {
       {/* ====================================================
           MODAL: WRITE REVIEW MODAL
           ==================================================== */}
-      <Dialog open={writeReviewModalOpen} onOpenChange={setWriteReviewModalOpen}>
+      <Dialog open={writeReviewModalOpen} onOpenChange={(open) => { if (!open) handleCloseWriteReviewModal(); else setWriteReviewModalOpen(true); }}>
         <DialogContent className="max-w-xl bg-white rounded-[28px] p-6 sm:p-7 border border-border shadow-2xl">
           {targetReviewProject && (
             <div className="space-y-5">
@@ -4901,8 +6009,8 @@ export default function Dashboard() {
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
                 <button
                   type="button"
-                  onClick={() => setWriteReviewModalOpen(false)}
-                  className="btn-secondary !py-2 !px-4 !text-xs"
+                  onClick={handleCloseWriteReviewModal}
+                  className="btn-secondary !py-2 !px-4 !text-xs cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -5033,6 +6141,17 @@ export default function Dashboard() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ====================================================
+          MODAL: DEMO PAYMENT FALLBACK
+          ==================================================== */}
+      <DemoPaymentModal
+        open={demoModalOpen}
+        onOpenChange={setDemoModalOpen}
+        details={demoPaymentDetails}
+        onConfirm={handleConfirmDemoPayment}
+        loading={demoPaymentLoading}
+      />
 
     </div>
   );

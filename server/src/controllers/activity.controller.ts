@@ -21,8 +21,9 @@ export const getOrderActivities = asyncHandler(async (req: any, res: Response) =
   }
 
   const activities = await Activity.find({ order: orderId })
-    .populate('user', 'name')
-    .sort({ createdAt: -1 });
+    .populate('user', 'name avatar avatarColor')
+    .sort({ createdAt: -1 })
+    .lean();
 
   return ApiResponse.success(res, { activities });
 });
@@ -33,19 +34,20 @@ export const getMyActivities = asyncHandler(async (req: any, res: Response) => {
   // Find all orders where user is client or freelancer
   const orders = await Order.find({
     $or: [{ client: userId }, { freelancer: userId }],
-  }).select('_id');
+  }).select('_id').lean();
 
   const orderIds = orders.map((o) => o._id);
 
   const activities = await Activity.find({ order: { $in: orderIds } })
-    .populate('user', 'name')
+    .populate('user', 'name avatar avatarColor')
     .populate({
       path: 'order',
       select: 'gig totalAmount status',
       populate: { path: 'gig', select: 'title' },
     })
     .sort({ createdAt: -1 })
-    .limit(20);
+    .limit(20)
+    .lean();
 
   return ApiResponse.success(res, { activities });
 });

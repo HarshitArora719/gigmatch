@@ -25,5 +25,10 @@ const ProposalSchema = new Schema<IProposal>({
 
 // Prevent duplicate proposals from same freelancer on same gig
 ProposalSchema.index({ gig: 1, freelancer: 1 }, { unique: true });
+ProposalSchema.index({ freelancer: 1, status: 1 });
+ProposalSchema.index({ gig: 1, status: 1 });
+ProposalSchema.index({ freelancer: 1, createdAt: -1 });
+ProposalSchema.index({ gig: 1, createdAt: -1 });
+ProposalSchema.index({ createdAt: -1 });
 
 export default mongoose.model<IProposal>('Proposal', ProposalSchema);

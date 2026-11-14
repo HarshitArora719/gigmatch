@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Routes, Route, useLocation, Navigate } from 'react-router-dom';
+import { Routes, Route, useLocation, Navigate, useParams } from 'react-router-dom';
 import { useAuthStore } from './store/authStore';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
@@ -8,13 +8,17 @@ import Gigs from './pages/Gigs';
 import GigDetail from './pages/GigDetail';
 import PostGig from './pages/PostGig';
 import Dashboard from './pages/Dashboard';
-import Workspace from './pages/Workspace';
 import Profile from './pages/Profile';
 import EditProfile from './pages/EditProfile';
 import GigProposals from './pages/GigProposals';
 import AuthModal from './components/AuthModal';
 import ProtectedRoute from './components/ProtectedRoute';
 import ErrorBoundary from './components/ErrorBoundary';
+
+function WorkspaceRedirect() {
+  const { id } = useParams();
+  return <Navigate to={id ? `/dashboard?tab=Workspace&orderId=${id}` : '/dashboard?tab=Workspace'} replace />;
+}
 
 function AppRoutes() {
   const location = useLocation();
@@ -95,7 +99,7 @@ function AppRoutes() {
             path="/workspace"
             element={
               <ProtectedRoute>
-                <Workspace />
+                <WorkspaceRedirect />
               </ProtectedRoute>
             }
           />
@@ -103,7 +107,7 @@ function AppRoutes() {
             path="/workspace/:id"
             element={
               <ProtectedRoute>
-                <Workspace />
+                <WorkspaceRedirect />
               </ProtectedRoute>
             }
           />

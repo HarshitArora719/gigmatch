@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../lib/axios';
 import { useAuthStore } from '../store/authStore';
+import { useChatStore } from '../store/chatStore';
 import {
   CheckCircle2,
   Send,
@@ -37,6 +38,28 @@ export default function GigDetail() {
   const [submitting, setSubmitting] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [similarGigs, setSimilarGigs] = useState<any[]>([]);
+
+  // Socket.IO real-time proposal count integration
+  const { socket, connectSocket } = useChatStore();
+
+  useEffect(() => {
+    connectSocket();
+  }, [connectSocket]);
+
+  useEffect(() => {
+    if (!socket || !id) return;
+
+    const handleProposalsUpdate = ({ gigId, proposalsCount }: { gigId: string; proposalsCount: number }) => {
+      if (gigId === id) {
+        setGig((prev: any) => (prev ? { ...prev, proposalsCount } : prev));
+      }
+    };
+
+    socket.on('gigProposalsUpdated', handleProposalsUpdate);
+    return () => {
+      socket.off('gigProposalsUpdated', handleProposalsUpdate);
+    };
+  }, [socket, id]);
 
   useEffect(() => {
     fetchGig();
@@ -86,6 +109,7 @@ export default function GigDetail() {
         proposedPrice: Number(proposal.proposedPrice),
         estimatedDays: Number(proposal.estimatedDays),
       });
+      setGig((prev: any) => (prev ? { ...prev, proposalsCount: (prev.proposalsCount || 0) + 1 } : prev));
       toast.success('Proposal submitted successfully!');
       setShowProposal(false);
       navigate('/my-proposals');
@@ -120,7 +144,42 @@ export default function GigDetail() {
       setAuthModal(true, 'login');
       return;
     }
-    toast.info(`Starting conversation with ${clientName}`);
+    // Navigate to dashboard Messages tab with hirer info
+    const clientId = gig.client?._id || '';
+    const clientNameParam = gig.client?.name || '';
+    const clientAvatar = gig.client?.avatar || '';
+    const clientAvatarColor = gig.client?.avatarColor || '';
+    const gigTitle = gig.title || '';
+    const gigId = gig._id || id || '';
+    let url = `/dashboard?tab=Messages&chatWith=${clientId}&chatName=${encodeURIComponent(clientNameParam)}`;
+    if (clientAvatar) url += `&chatAvatar=${encodeURIComponent(clientAvatar)}`;
+    if (clientAvatarColor) url += `&chatAvatarColor=${encodeURIComponent(clientAvatarColor)}`;
+    if (gigTitle) url += `&gigTitle=${encodeURIComponent(gigTitle)}`;
+    if (gigId) url += `&gigId=${gigId}`;
+    navigate(url);
+  };
+
+  const scrollToProposal = () => {
+    const doScroll = () => {
+      const formEl = document.getElementById('proposal-form-section');
+      if (formEl) {
+        formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const textarea = formEl.querySelector('textarea') as HTMLTextAreaElement | null;
+        if (textarea) {
+          textarea.focus({ preventScroll: true });
+        }
+        return true;
+      }
+      return false;
+    };
+
+    if (!doScroll()) {
+      setTimeout(() => {
+        if (!doScroll()) {
+          setTimeout(doScroll, 100);
+        }
+      }, 50);
+    }
   };
 
   const handleApplyClick = () => {
@@ -133,8 +192,7 @@ export default function GigDetail() {
       return;
     }
     setShowProposal(true);
-    const formEl = document.getElementById('proposal-form-section');
-    formEl?.scrollIntoView({ behavior: 'smooth' });
+    scrollToProposal();
   };
 
   // Fetch similar gigs in the same category
@@ -195,7 +253,7 @@ export default function GigDetail() {
   const platformFee = Math.round(bidPriceNumber * 0.05);
   const netEarnings = Math.max(0, bidPriceNumber - platformFee);
 
-  // Normalize attachments list from gig.attachments and gig.images
+  // Normalize attachments list from gig.attachments AND gig.images (both are combined)
   const rawAttachments: Array<{ name: string; url: string; size?: number; type?: string }> = [];
   if (gig.attachments && Array.isArray(gig.attachments)) {
     gig.attachments.forEach((att: any, i: number) => {
@@ -210,9 +268,14 @@ export default function GigDetail() {
         });
       }
     });
-  } else if (gig.images && Array.isArray(gig.images)) {
+  }
+  if (gig.images && Array.isArray(gig.images)) {
     gig.images.forEach((img: string, i: number) => {
-      rawAttachments.push({ name: `Project Asset ${i + 1}`, url: img, type: 'image/jpeg' });
+      // Avoid duplicating if already present in attachments
+      const alreadyIncluded = rawAttachments.some(a => a.url === img);
+      if (!alreadyIncluded) {
+        rawAttachments.push({ name: `Project Asset ${i + 1}`, url: img, type: 'image/jpeg' });
+      }
     });
   }
 
@@ -320,8 +383,9 @@ export default function GigDetail() {
                   <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 block mb-1">
                     Proposals Volume
                   </span>
-                  <span className="font-bold text-xs sm:text-sm text-purple">
-                    {gig.proposalsCount || 0} Submissions
+                  <span className="font-bold text-xs sm:text-sm text-purple flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-purple animate-pulse" />
+                    {gig.proposalsCount || 0} {(gig.proposalsCount || 0) === 1 ? 'Submission' : 'Submissions'}
                   </span>
                 </div>
 
@@ -672,6 +736,8 @@ export default function GigDetail() {
                         </span>
                         <input
                           type="number"
+                          step="100"
+                          min="100"
                           placeholder="e.g. 8000"
                           value={proposal.proposedPrice}
                           onChange={(e) => setProposal({ ...proposal, proposedPrice: e.target.value })}
@@ -844,7 +910,9 @@ export default function GigDetail() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-ink/50">Proposals Received:</span>
-                  <strong className="text-purple font-bold">{gig.proposalsCount || 0} Submissions</strong>
+                  <strong className="text-purple font-bold">
+                    {gig.proposalsCount || 0} {(gig.proposalsCount || 0) === 1 ? 'Submission' : 'Submissions'}
+                  </strong>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-ink/50">Target Turnaround:</span>
@@ -858,11 +926,7 @@ export default function GigDetail() {
               <div className="space-y-2.5">
                 {user?.role === 'freelancer' && (
                   <button
-                    onClick={() => {
-                      setShowProposal(true);
-                      const formEl = document.getElementById('proposal-form-section');
-                      formEl?.scrollIntoView({ behavior: 'smooth' });
-                    }}
+                    onClick={handleApplyClick}
                     className="w-full btn-primary !py-3.5 !text-sm justify-center shadow-lg shadow-purple/20"
                   >
                     <Send size={16} />

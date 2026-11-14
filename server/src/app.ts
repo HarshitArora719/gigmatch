@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
+import path from 'path';
 
 dotenv.config();
 
@@ -13,7 +14,12 @@ const app = express();
 app.set('trust proxy', 1);
 
 app.use(cookieParser());
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+
+// Serve uploaded static assets
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Dynamic CORS configuration
 const allowedOrigins = [
@@ -83,6 +89,7 @@ import reviewRoutes from './routes/review.routes';
 import uploadRoutes from './routes/upload.routes';
 import deliverableRoutes from './routes/deliverable.routes';
 import activityRoutes from './routes/activity.routes';
+import notificationRoutes from './routes/notification.routes';
 import { notFoundHandler, errorHandler } from './middleware/error.middleware';
 
 // Mount routes with specific rate limits
@@ -92,6 +99,7 @@ app.use('/api/gigs', gigRoutes);
 app.use('/api/proposals', actionLimiter, proposalRoutes);
 app.use('/api/orders', actionLimiter, orderRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/payments', actionLimiter, paymentRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/uploads', uploadRoutes);

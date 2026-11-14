@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/skeleton';
+import { openRazorpayModal } from '../lib/razorpay';
+import DemoPaymentModal from '../components/DemoPaymentModal';
 
 export default function GigProposals() {
   const { gigId } = useParams();
@@ -19,6 +21,11 @@ export default function GigProposals() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  // Demo payment fallback state (when Razorpay is not configured)
+  const [demoModalOpen, setDemoModalOpen] = useState(false);
+  const [demoPaymentDetails, setDemoPaymentDetails] = useState<any>(null);
+  const [demoPaymentLoading, setDemoPaymentLoading] = useState(false);
 
   useEffect(() => {
     if (!user) { navigate('/'); return; }
@@ -46,13 +53,94 @@ export default function GigProposals() {
   const handleAccept = async (proposalId: string) => {
     setActionLoading(proposalId);
     try {
-      await api.post('/api/orders/accept', { proposalId });
-      toast.success('Proposal accepted! Order created successfully.');
-      fetchData(); // Refresh to show updated statuses
+      const res = await api.post('/api/payments/create-order', { proposalId });
+      const data = res.data.data;
+
+      if (data.mode === 'razorpay') {
+        // Razorpay Gateway Flow (Live / Test mode)
+        await openRazorpayModal({
+          key: data.keyId,
+          amount: data.amount,
+          currency: data.currency || 'INR',
+          name: 'GigMatch Escrow',
+          description: `Escrow Hold for ${data.gigTitle || gig?.title || 'Project'}`,
+          order_id: data.orderId,
+          prefill: {
+            name: user?.name,
+            email: user?.email,
+          },
+          handler: async (response) => {
+            try {
+              setActionLoading(proposalId);
+              const verifyRes = await api.post('/api/payments/verify-signature', {
+                proposalId,
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              });
+              toast.success('Payment verified & escrow held! Order is now active.');
+              fetchData();
+              if (verifyRes.data.data.order?._id) {
+                navigate(`/dashboard?tab=Workspace&orderId=${verifyRes.data.data.order._id}`);
+              }
+            } catch (err: any) {
+              toast.error(err.response?.data?.message || 'Payment signature verification failed.');
+            } finally {
+              setActionLoading(null);
+            }
+          },
+          onDismiss: async () => {
+            setActionLoading(null);
+            await api.post('/api/payments/record-failure', {
+              razorpay_order_id: data.orderId,
+              reason: 'Payment cancelled by client',
+            }).catch(() => {});
+            toast.info('Payment was cancelled. Order was not created.');
+          },
+          onFailed: async (error: any) => {
+            setActionLoading(null);
+            await api.post('/api/payments/record-failure', {
+              razorpay_order_id: data.orderId,
+              reason: error?.description || 'Payment failed at gateway',
+            }).catch(() => {});
+            toast.error(`Payment failed: ${error?.description || 'Transaction unsuccessful'}. Order not created.`);
+          },
+        });
+      } else {
+        // Fallback: Razorpay keys not configured -> Open Demo Payment Modal
+        setDemoPaymentDetails({
+          proposalId,
+          gigTitle: data.gigTitle || gig?.title,
+          totalAmount: data.totalAmount,
+          platformCommission: data.platformCommission,
+          freelancerEarnings: data.freelancerEarnings,
+        });
+        setDemoModalOpen(true);
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to accept proposal');
+      toast.error(err.response?.data?.message || 'Failed to initiate payment');
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleConfirmDemoPayment = async () => {
+    if (!demoPaymentDetails?.proposalId) return;
+    setDemoPaymentLoading(true);
+    try {
+      const res = await api.post('/api/payments/demo-payment', {
+        proposalId: demoPaymentDetails.proposalId,
+      });
+      toast.success('Demo payment confirmed! Order created & escrow secured.');
+      setDemoModalOpen(false);
+      fetchData();
+      if (res.data.data.order?._id) {
+        navigate(`/dashboard?tab=Workspace&orderId=${res.data.data.order._id}`);
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to process demo payment');
+    } finally {
+      setDemoPaymentLoading(false);
     }
   };
 
@@ -199,8 +287,19 @@ export default function GigProposals() {
                     onClick={() => p.freelancer?._id && navigate(`/profile/${p.freelancer._id}`)}
                     title="View Freelancer Public Profile"
                   >
-                    <div className="w-10 h-10 rounded-[14px] bg-purple/10 text-purple flex items-center justify-center font-display font-bold text-sm shrink-0 group-hover/user:scale-105 transition-transform">
-                      {(p.freelancer?.name || 'U')[0].toUpperCase()}
+                    <div
+                      className="w-10 h-10 rounded-[14px] flex items-center justify-center font-display font-bold text-sm shrink-0 group-hover/user:scale-105 transition-transform overflow-hidden shadow-xs ring-2 ring-white"
+                      style={{ backgroundColor: p.freelancer?.avatarColor || '#22D3EE' }}
+                    >
+                      {p.freelancer?.avatar ? (
+                        <img
+                          src={p.freelancer.avatar}
+                          alt={p.freelancer?.name}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        (p.freelancer?.name || 'U')[0].toUpperCase()
+                      )}
                     </div>
                     <div>
                       <h4 className="font-bold text-sm text-ink group-hover/user:text-purple transition-colors">{p.freelancer?.name || 'Unknown Freelancer'}</h4>
@@ -277,6 +376,18 @@ export default function GigProposals() {
           })}
         </div>
       </div>
+
+      {/* ====================================================
+          MODAL: DEMO PAYMENT FALLBACK
+          ==================================================== */}
+      <DemoPaymentModal
+        open={demoModalOpen}
+        onOpenChange={setDemoModalOpen}
+        details={demoPaymentDetails}
+        onConfirm={handleConfirmDemoPayment}
+        loading={demoPaymentLoading}
+      />
+
     </div>
   );
 }

@@ -4,6 +4,26 @@ import Proposal from '../models/Proposal.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiResponse } from '../utils/apiResponse';
 
+// ─── High-Speed In-Memory Cache with TTL ────────────────────────────────────
+interface CacheItem<T = any> {
+  data: T;
+  expiresAt: number;
+}
+
+const gigsListCache = new Map<string, CacheItem>();
+const singleGigCache = new Map<string, CacheItem>();
+const GIGS_CACHE_TTL_MS = 25 * 1000; // 25 seconds TTL
+const SINGLE_GIG_CACHE_TTL_MS = 20 * 1000; // 20 seconds TTL
+
+export const invalidateGigsCache = (specificGigId?: string) => {
+  gigsListCache.clear();
+  if (specificGigId) {
+    singleGigCache.delete(specificGigId);
+  } else {
+    singleGigCache.clear();
+  }
+};
+
 export const createGig = asyncHandler(async (req: any, res: Response) => {
   const { title, description, category, tags, budget, deadline, images, attachments, experienceLevel } = req.body;
 
@@ -38,11 +58,24 @@ export const createGig = asyncHandler(async (req: any, res: Response) => {
     status: 'open',
   });
 
+  // Invalidate cache immediately so new gig is visible everywhere
+  invalidateGigsCache();
+
   return ApiResponse.success(res, { gig }, 'Gig posted successfully', 201);
 });
 
 export const getAllGigs = asyncHandler(async (req: Request, res: Response) => {
   const { search, category, minBudget, maxBudget, page = 1, limit = 12 } = req.query;
+
+  const pageNum = Math.max(1, parseInt(String(page)) || 1);
+  const limitNum = Math.min(50, Math.max(1, parseInt(String(limit)) || 12));
+
+  // Check in-memory cache first for instant sub-millisecond delivery
+  const cacheKey = `${search || ''}|${category || ''}|${minBudget || ''}|${maxBudget || ''}|${pageNum}|${limitNum}`;
+  const cached = gigsListCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return ApiResponse.success(res, cached.data);
+  }
 
   let query: any = { status: 'open' };
 
@@ -67,36 +100,79 @@ export const getAllGigs = asyncHandler(async (req: Request, res: Response) => {
     if (maxBudget) query.budget.$lte = Number(maxBudget);
   }
 
-  const pageNum = Math.max(1, parseInt(String(page)) || 1);
-  const limitNum = Math.min(50, Math.max(1, parseInt(String(limit)) || 12));
+  const [gigs, total] = await Promise.all([
+    Gig.find(query)
+      .select('title description category tags budget deadline experienceLevel status createdAt client images')
+      .populate('client', 'name avatar avatarColor')
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .lean(),
+    Gig.countDocuments(query),
+  ]);
 
-  const gigs = await Gig.find(query)
-    .populate('client', 'name avatar avatarColor')
-    .sort({ createdAt: -1 })
-    .skip((pageNum - 1) * limitNum)
-    .limit(limitNum);
+  let gigsWithCounts = gigs;
+  const gigIds = gigs.map((g: any) => g._id);
+  if (gigIds.length > 0) {
+    const proposalCounts = await Proposal.aggregate([
+      { $match: { gig: { $in: gigIds } } },
+      { $group: { _id: '$gig', count: { $sum: 1 } } },
+    ]);
+    const countMap = new Map<string, number>();
+    proposalCounts.forEach((c: any) => countMap.set(c._id.toString(), c.count));
 
-  const total = await Gig.countDocuments(query);
+    gigsWithCounts = gigs.map((gig: any) => ({
+      ...gig,
+      proposalsCount: countMap.get(gig._id.toString()) || 0
+    }));
+  }
 
-  return ApiResponse.success(res, {
-    gigs,
+  const responsePayload = {
+    gigs: gigsWithCounts,
     pagination: {
       total,
       page: pageNum,
       pages: Math.ceil(total / limitNum) || 1,
       limit: limitNum
     }
+  };
+
+  // Cache response for rapid repeated queries
+  gigsListCache.set(cacheKey, {
+    data: responsePayload,
+    expiresAt: Date.now() + GIGS_CACHE_TTL_MS,
   });
+
+  return ApiResponse.success(res, responsePayload);
 });
 
 export const getGigById = asyncHandler(async (req: Request, res: Response) => {
-  const gig = await Gig.findById(req.params.id).populate('client', 'name avatar avatarColor');
+  const gigId = String(req.params.id);
+
+  // Check single gig cache
+  const cached = singleGigCache.get(gigId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return ApiResponse.success(res, cached.data);
+  }
+
+  const [gig, proposalsCount] = await Promise.all([
+    Gig.findById(gigId)
+      .populate('client', 'name avatar avatarColor')
+      .lean(),
+    Proposal.countDocuments({ gig: gigId }),
+  ]);
 
   if (!gig) {
     return ApiResponse.error(res, 'Gig not found', 404);
   }
 
-  return ApiResponse.success(res, { gig });
+  const payload = { gig: { ...gig, proposalsCount } };
+  singleGigCache.set(gigId, {
+    data: payload,
+    expiresAt: Date.now() + SINGLE_GIG_CACHE_TTL_MS,
+  });
+
+  return ApiResponse.success(res, payload);
 });
 
 export const getMyGigs = asyncHandler(async (req: any, res: Response) => {
@@ -104,13 +180,23 @@ export const getMyGigs = asyncHandler(async (req: any, res: Response) => {
     .sort({ createdAt: -1 })
     .lean();
 
-  // Attach proposal counts to each gig
-  const gigsWithCounts = await Promise.all(
-    gigs.map(async (gig: any) => {
-      const proposalsCount = await Proposal.countDocuments({ gig: gig._id });
-      return { ...gig, proposalsCount };
-    })
-  );
+  if (gigs.length === 0) {
+    return ApiResponse.success(res, { gigs: [] });
+  }
+
+  // Attach proposal counts using a single fast aggregation rather than N+1 queries
+  const gigIds = gigs.map((g: any) => g._id);
+  const proposalCounts = await Proposal.aggregate([
+    { $match: { gig: { $in: gigIds } } },
+    { $group: { _id: '$gig', count: { $sum: 1 } } },
+  ]);
+  const countMap = new Map<string, number>();
+  proposalCounts.forEach((c: any) => countMap.set(c._id.toString(), c.count));
+
+  const gigsWithCounts = gigs.map((gig: any) => ({
+    ...gig,
+    proposalsCount: countMap.get(gig._id.toString()) || 0,
+  }));
 
   return ApiResponse.success(res, { gigs: gigsWithCounts });
 });
@@ -134,6 +220,7 @@ export const updateGig = asyncHandler(async (req: any, res: Response) => {
   if (status && ['open', 'in-progress', 'completed', 'closed'].includes(status)) gig.status = status;
 
   await gig.save();
+  invalidateGigsCache(gig._id.toString());
   return ApiResponse.success(res, { gig }, 'Gig updated successfully');
 });
 
@@ -147,5 +234,6 @@ export const deleteGig = asyncHandler(async (req: any, res: Response) => {
   }
 
   await Gig.findByIdAndDelete(req.params.id);
+  invalidateGigsCache(String(req.params.id));
   return ApiResponse.success(res, {}, 'Gig deleted successfully');
 });

@@ -82,7 +82,38 @@ export const getMyReviews = asyncHandler(async (req: any, res: Response) => {
       select: 'gig totalAmount status completedAt',
       populate: { path: 'gig', select: 'title category budget' }
     })
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
+
+  // Ensure avatars and avatarColors are populated from Profile if not present on User
+  const userIdsToLookup: string[] = [];
+  reviews.forEach((r: any) => {
+    if (r.from && !r.from.avatar) userIdsToLookup.push(r.from._id?.toString() || r.from.toString());
+    if (r.to && !r.to.avatar) userIdsToLookup.push(r.to._id?.toString() || r.to.toString());
+  });
+
+  if (userIdsToLookup.length > 0) {
+    const profiles = await Profile.find({ user: { $in: userIdsToLookup } })
+      .select('user avatar avatarColor')
+      .lean();
+    const profileMap = new Map<string, any>();
+    profiles.forEach((p: any) => profileMap.set(p.user.toString(), p));
+
+    reviews.forEach((r: any) => {
+      const fromId = r.from?._id?.toString() || r.from?.toString();
+      if (r.from && !r.from.avatar && profileMap.has(fromId)) {
+        const p = profileMap.get(fromId);
+        r.from.avatar = p.avatar || '';
+        if (p.avatarColor) r.from.avatarColor = p.avatarColor;
+      }
+      const toId = r.to?._id?.toString() || r.to?.toString();
+      if (r.to && !r.to.avatar && profileMap.has(toId)) {
+        const p = profileMap.get(toId);
+        r.to.avatar = p.avatar || '';
+        if (p.avatarColor) r.to.avatarColor = p.avatarColor;
+      }
+    });
+  }
 
   return ApiResponse.success(res, { reviews });
 });
@@ -101,10 +132,11 @@ export const getReviewsByUserId = asyncHandler(async (req: any, res: Response) =
       select: 'gig totalAmount status completedAt',
       populate: { path: 'gig', select: 'title category budget' }
     })
-    .sort({ createdAt: -1 });
+    .sort({ createdAt: -1 })
+    .lean();
 
   const totalReviews = reviews.length;
-  const ratingSum = reviews.reduce((sum, r) => sum + (r.rating || 0), 0);
+  const ratingSum = reviews.reduce((sum: number, r: any) => sum + (r.rating || 0), 0);
   const averageRating = totalReviews > 0 ? parseFloat((ratingSum / totalReviews).toFixed(1)) : 0;
 
   return ApiResponse.success(res, {

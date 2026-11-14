@@ -3,6 +3,7 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000',
   withCredentials: true, // For httpOnly cookies
+  timeout: 15000, // 15-second timeout prevents indefinite hanging
 });
 
 // Attach Authorization header if token exists in localStorage (cross-domain backup)

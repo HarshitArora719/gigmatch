@@ -18,6 +18,7 @@ interface AuthState {
   register: (name: string, email: string, password: string, role: string) => Promise<void>;
   logout: () => Promise<void>;
   fetchMe: () => Promise<void>;
+  updateUser: (fields: Partial<User>) => void;
   isAuthModalOpen: boolean;
   authModalView: 'login' | 'register';
   setAuthModal: (open: boolean, view?: 'login' | 'register') => void;
@@ -36,6 +37,11 @@ export const useAuthStore = create<AuthState>((set) => ({
       authModalView: view || state.authModalView 
     })),
 
+  updateUser: (fields) =>
+    set((state) => ({
+      user: state.user ? { ...state.user, ...fields } : null,
+    })),
+
   fetchMe: async () => {
     try {
       const res = await api.get('/api/users/me');
@@ -51,9 +57,13 @@ export const useAuthStore = create<AuthState>((set) => ({
         },
         isInitialized: true,
       });
-    } catch {
-      localStorage.removeItem('gm_token');
-      set({ user: null, isInitialized: true });
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        localStorage.removeItem('gm_token');
+        set({ user: null, isInitialized: true });
+      } else {
+        set({ isInitialized: true });
+      }
     }
   },
 

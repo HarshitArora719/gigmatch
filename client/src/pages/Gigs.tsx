@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../lib/axios';
+import { useChatStore } from '../store/chatStore';
 import { Search, ArrowUpRight, SlidersHorizontal, Briefcase } from 'lucide-react';
 import { Button } from '../components/ui/button';
 
@@ -40,6 +41,7 @@ interface GigCardProps {
   title: string;
   meta: string;
   startingPrice: string;
+  proposalsCount?: number;
   onClick?: () => void;
 }
 
@@ -52,6 +54,7 @@ function GigCard({
   title,
   meta,
   startingPrice,
+  proposalsCount = 0,
   onClick,
 }: GigCardProps) {
   return (
@@ -123,8 +126,14 @@ function GigCard({
           {title}
         </h3>
 
-        {/* Meta */}
-        <p className="text-[12px] font-medium text-ink/50 mb-0">{meta}</p>
+        {/* Meta & Proposals Flexbox */}
+        <div className="flex items-center justify-between gap-2 mb-0">
+          <p className="text-[12px] font-medium text-ink/50 mb-0">{meta}</p>
+          <span className="text-[11px] font-bold text-purple bg-purple/10 px-2.5 py-0.5 rounded-full shrink-0 flex items-center gap-1.5 transition-all">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple inline-block" />
+            {proposalsCount} {proposalsCount === 1 ? 'proposal' : 'proposals'}
+          </span>
+        </div>
 
         {/* CTA */}
         <div className="mt-auto pt-4">
@@ -146,8 +155,26 @@ function GigCard({
    ────────────────────────────────────────────── */
 
 export default function Gigs() {
-  const [apiGigs, setApiGigs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [apiGigs, setApiGigs] = useState<any[]>(() => {
+    try {
+      const cached = sessionStorage.getItem('gm_cached_gigs');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [loading, setLoading] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('gm_cached_gigs');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return false;
+      }
+    } catch (e) {}
+    return true;
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [activeCategory, setActiveCategory] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -162,22 +189,53 @@ export default function Gigs() {
     if (urlCategory) setActiveCategory(urlCategory);
   }, [searchParams]);
 
-  // Fetch API gigs
-  useEffect(() => {
-    fetchGigs();
-  }, []);
+  // Socket.IO real-time proposal count integration
+  const { socket, connectSocket } = useChatStore();
 
-  const fetchGigs = async () => {
-    setLoading(true);
+  useEffect(() => {
+    connectSocket();
+  }, [connectSocket]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleProposalsUpdate = ({ gigId, proposalsCount }: { gigId: string; proposalsCount: number }) => {
+      setApiGigs((prevGigs) => {
+        const updated = prevGigs.map((g) => (g._id === gigId ? { ...g, proposalsCount } : g));
+        try {
+          sessionStorage.setItem('gm_cached_gigs', JSON.stringify(updated));
+        } catch (e) {}
+        return updated;
+      });
+    };
+
+    socket.on('gigProposalsUpdated', handleProposalsUpdate);
+    return () => {
+      socket.off('gigProposalsUpdated', handleProposalsUpdate);
+    };
+  }, [socket]);
+
+  // Fetch API gigs with SWR (Stale-While-Revalidate)
+  const fetchGigs = async (isBackground = false) => {
+    if (!isBackground) setLoading(true);
     try {
-      const res = await api.get('/api/gigs');
-      setApiGigs(res.data.data.gigs || []);
+      const res = await api.get('/api/gigs?limit=50');
+      const gigsData = res.data?.data?.gigs || [];
+      setApiGigs(gigsData);
+      try {
+        sessionStorage.setItem('gm_cached_gigs', JSON.stringify(gigsData));
+      } catch (e) {}
     } catch (e) {
       console.error('Failed to fetch gigs:', e);
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    const hasCached = apiGigs.length > 0;
+    fetchGigs(hasCached);
+  }, []);
 
   // Filter API gigs
   const filteredApi = useMemo(() => {
@@ -343,8 +401,9 @@ export default function Gigs() {
                     category={categoryLabel}
                     clientName={client}
                     title={gig.title}
-                    meta={`₹${budgetNum.toLocaleString('en-IN')} · Remote · ${gig.proposalsCount || 0} proposals`}
+                    meta={`₹${budgetNum.toLocaleString('en-IN')} · Remote`}
                     startingPrice={`₹${budgetNum.toLocaleString('en-IN')}`}
+                    proposalsCount={gig.proposalsCount || 0}
                     onClick={() => navigate(`/gigs/${gig._id}`)}
                   />
                 );

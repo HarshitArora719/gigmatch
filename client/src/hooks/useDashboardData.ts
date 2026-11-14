@@ -82,7 +82,7 @@ export function useDashboardData(user: { id: string; role: string } | null) {
       const proposals = results[3]?.data?.data?.proposals || [];
 
       // Compute stats
-      const activeOrders = orders.filter((o: any) => o.status === 'active').length;
+      const activeOrders = orders.filter((o: any) => ['active', 'delivered', 'revision_requested', 'in_review'].includes(o.status)).length;
       const completedOrders = orders.filter((o: any) => o.status === 'completed').length;
 
       // Client stats

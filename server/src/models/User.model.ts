@@ -32,4 +32,7 @@ const UserSchema = new Schema<IUser>({
   isVerified: { type: Boolean, default: false },
 }, { timestamps: true });
 
+UserSchema.index({ role: 1 });
+UserSchema.index({ createdAt: -1 });
+
 export default mongoose.model<IUser>('User', UserSchema);

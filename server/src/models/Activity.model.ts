@@ -9,9 +9,13 @@ export type ActivityType =
   | 'deliverable_uploaded'
   | 'deliverable_approved'
   | 'deliverable_rejected'
+  | 'deliverables_submitted'
+  | 'revised_deliverables_submitted'
   | 'message_sent'
   | 'order_completed'
-  | 'revision_requested';
+  | 'revision_requested'
+  | 'payment_released'
+  | 'escrow_released';
 
 export interface IActivity extends Document {
   order: mongoose.Types.ObjectId;
@@ -38,9 +42,13 @@ const ActivitySchema = new Schema<IActivity>({
       'deliverable_uploaded',
       'deliverable_approved',
       'deliverable_rejected',
+      'deliverables_submitted',
+      'revised_deliverables_submitted',
       'message_sent',
       'order_completed',
       'revision_requested',
+      'payment_released',
+      'escrow_released',
     ],
     required: true,
   },

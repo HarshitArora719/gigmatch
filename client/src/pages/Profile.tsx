@@ -35,8 +35,10 @@ import {
   Terminal,
   Layers,
   CheckCheck,
-  Clock
+  Clock,
+  FileText
 } from 'lucide-react';
+import { Github, Linkedin } from '../components/icons/BrandIcons';
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/skeleton';
 
@@ -52,7 +54,7 @@ export default function Profile() {
 
   useEffect(() => {
     fetchProfileData();
-  }, [userId, currentUser]);
+  }, [userId, currentUser?.id]);
 
   const fetchProfileData = async () => {
     try {
@@ -288,13 +290,23 @@ export default function Profile() {
                         <Edit3 size={15} />
                         <span>Edit Profile</span>
                       </button>
-                      <button
-                        onClick={() => navigate('/post-gig')}
-                        className="btn-primary !py-2.5 !px-5 !text-xs sm:!text-sm inline-flex items-center gap-2"
-                      >
-                        <Plus size={15} />
-                        <span>Post a Gig</span>
-                      </button>
+                      {currentUser?.role === 'client' ? (
+                        <button
+                          onClick={() => navigate('/post-gig')}
+                          className="btn-primary !py-2.5 !px-5 !text-xs sm:!text-sm inline-flex items-center gap-2"
+                        >
+                          <Plus size={15} />
+                          <span>Post a Gig</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => navigate('/gigs')}
+                          className="btn-primary !py-2.5 !px-5 !text-xs sm:!text-sm inline-flex items-center gap-2"
+                        >
+                          <Briefcase size={15} />
+                          <span>Explore Gigs</span>
+                        </button>
+                      )}
                     </>
                   ) : (
                     <>
@@ -653,10 +665,14 @@ export default function Profile() {
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
                               <div
-                                className="w-10 h-10 rounded-[14px] flex items-center justify-center font-clash font-bold text-xs text-ink shadow-xs"
+                                className="w-10 h-10 rounded-[14px] flex items-center justify-center font-clash font-bold text-xs text-ink shadow-xs overflow-hidden"
                                 style={{ backgroundColor: rev.avatarColor || '#22D3EE' }}
                               >
-                                {rev.initials}
+                                {rev.avatar ? (
+                                  <img src={rev.avatar} alt={rev.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  rev.initials
+                                )}
                               </div>
                               <div>
                                 <h4 className="font-bold text-sm text-ink">{rev.name}</h4>
@@ -937,7 +953,51 @@ export default function Profile() {
              FREELANCER PROFILE (100% BACKEND-DRIVEN, ZERO MOCK DATA)
              ==================================================== */
           <>
-            {/* 1. FREELANCER HERO HEADER CARD */}
+            {/* PROFILE COMPLETENESS INDICATOR (TOP OF PROFILE) */}
+            <section aria-label="Profile Completeness" className="bg-white rounded-[24px] p-5 sm:p-6 border border-border/70 shadow-[0_4px_20px_rgba(0,0,0,0.03)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-12 h-12 rounded-2xl bg-purple/10 text-purple flex items-center justify-center font-clash font-extrabold text-sm shrink-0">
+                  {p.profileCompletionPercentage ?? p.profileCompletion ?? 20}%
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-display font-bold text-sm sm:text-base text-ink">
+                      Profile Completeness: {p.profileCompletionPercentage ?? p.profileCompletion ?? 20}% Complete
+                    </h3>
+                    {(p.profileCompletionPercentage ?? p.profileCompletion ?? 0) === 100 && (
+                      <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                        All Sections Completed
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-ink/50 font-medium truncate">
+                    {isOwner
+                      ? 'Completed profiles appear higher in search and attract 3x more hirer project invitations.'
+                      : 'Verified marketplace profile with authenticated projects, portfolio case studies, and work preferences.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="w-32 sm:w-44 h-2.5 bg-soft rounded-full overflow-hidden border border-border/60">
+                  <div
+                    className="h-full gradient-primary rounded-full transition-all duration-500"
+                    style={{ width: `${p.profileCompletionPercentage ?? p.profileCompletion ?? 20}%` }}
+                  />
+                </div>
+                {isOwner && (
+                  <button
+                    onClick={() => navigate('/profile/edit')}
+                    className="btn-secondary !py-1.5 !px-3 !text-xs inline-flex items-center gap-1 shrink-0"
+                  >
+                    <Edit3 size={12} />
+                    <span>Update</span>
+                  </button>
+                )}
+              </div>
+            </section>
+
+            {/* SECTION 1: PERSONAL INFORMATION & HERO CARD */}
             <section className="bg-white rounded-[28px] p-6 sm:p-8 lg:p-10 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] relative overflow-hidden">
               <div
                 className="absolute top-0 right-0 w-[450px] h-[450px] rounded-full opacity-15 pointer-events-none -mr-24 -mt-24 blur-3xl"
@@ -993,7 +1053,7 @@ export default function Profile() {
                     </div>
 
                     <p className="text-sm sm:text-base font-bold text-purple flex items-center gap-2">
-                      <span>{p.roleTitle || 'Independent Creator'}</span>
+                      <span>{p.roleTitle || 'Full Stack Developer'}</span>
                       {p.experience && p.experience > 0 ? (
                         <>
                           <span className="text-ink/30">·</span>
@@ -1021,8 +1081,10 @@ export default function Profile() {
                       </span>
                       <span>·</span>
                       <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-800 bg-emerald-100/90 px-2.5 py-0.5 rounded-full border border-emerald-200/60">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <span>Available for Work</span>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          (p.availabilityStatus || 'Available Now') === 'Unavailable' ? 'bg-ink/40' : 'bg-emerald-500 animate-pulse'
+                        }`} />
+                        <span>{p.availabilityStatus || 'Available Now'}</span>
                       </span>
                     </div>
                   </div>
@@ -1078,7 +1140,7 @@ export default function Profile() {
                 </div>
               </div>
 
-              {/* 2. ABOUT ME */}
+              {/* SECTION 2: ABOUT ME */}
               <div className="mt-8 pt-6 border-t border-border/60 space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="eyebrow text-purple">ABOUT ME</span>
@@ -1097,11 +1159,11 @@ export default function Profile() {
                   {p.bio || (isOwner ? 'No professional summary added yet. Click Edit Profile to add your bio and experience.' : 'No professional summary provided yet.')}
                 </p>
 
-                {/* Real Skills & Specializations */}
+                {/* Core Skills & Specializations */}
                 {p.skills && p.skills.length > 0 && (
                   <div className="pt-2 flex flex-wrap items-center gap-2 text-xs font-semibold text-ink/70">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 mr-1">Specializations:</span>
-                    {p.skills.slice(0, 6).map((skill: string, idx: number) => (
+                    {p.skills.slice(0, 8).map((skill: string, idx: number) => (
                       <span
                         key={idx}
                         className="bg-purple/5 text-purple border border-purple/20 px-3 py-1 rounded-full text-xs font-semibold"
@@ -1111,10 +1173,99 @@ export default function Profile() {
                     ))}
                   </div>
                 )}
+
+                {/* Languages Spoken */}
+                {p.languages && p.languages.length > 0 && (
+                  <div className="pt-1 flex flex-wrap items-center gap-2 text-xs font-semibold text-ink/70">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 mr-1 flex items-center gap-1">
+                      <Globe size={12} />
+                      <span>Languages:</span>
+                    </span>
+                    {p.languages.map((lang: string, idx: number) => (
+                      <span
+                        key={idx}
+                        className="bg-soft text-ink/80 border border-border/60 px-3 py-0.5 rounded-full text-xs font-semibold"
+                      >
+                        {lang}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* SECTION 3: PROFESSIONAL LINKS & RESUME CV */}
+                <div className="pt-4 border-t border-border/50 flex flex-wrap items-center gap-2.5 text-xs font-semibold">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-ink/40 mr-1">Professional Links:</span>
+                  
+                  {p.githubUrl && (
+                    <a
+                      href={p.githubUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary !py-1.5 !px-3 !text-xs inline-flex items-center gap-1.5 hover:border-purple/40 text-ink"
+                    >
+                      <Github size={13} />
+                      <span>GitHub</span>
+                      <ExternalLink size={10} className="text-ink/40" />
+                    </a>
+                  )}
+
+                  {p.linkedinUrl && (
+                    <a
+                      href={p.linkedinUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary !py-1.5 !px-3 !text-xs inline-flex items-center gap-1.5 hover:border-purple/40 text-[#0077B5]"
+                    >
+                      <Linkedin size={13} />
+                      <span>LinkedIn</span>
+                      <ExternalLink size={10} className="text-ink/40" />
+                    </a>
+                  )}
+
+                  {p.portfolioUrl && (
+                    <a
+                      href={p.portfolioUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary !py-1.5 !px-3 !text-xs inline-flex items-center gap-1.5 hover:border-purple/40 text-purple"
+                    >
+                      <Globe size={13} />
+                      <span>Portfolio</span>
+                      <ExternalLink size={10} className="text-purple/50" />
+                    </a>
+                  )}
+
+                  {p.resumeUrl && (
+                    <a
+                      href={p.resumeUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn-secondary !py-1.5 !px-3 !text-xs inline-flex items-center gap-1.5 text-emerald-800 bg-emerald-50 border-emerald-200/70 hover:bg-emerald-100"
+                    >
+                      <FileText size={13} className="text-emerald-700" />
+                      <span>View Resume / CV (PDF)</span>
+                      <ExternalLink size={10} className="text-emerald-700" />
+                    </a>
+                  )}
+
+                  {!p.githubUrl && !p.linkedinUrl && !p.portfolioUrl && !p.resumeUrl && (
+                    isOwner ? (
+                      <button
+                        onClick={() => navigate('/profile/edit')}
+                        className="text-xs font-bold text-purple hover:underline inline-flex items-center gap-1 bg-transparent border-0 cursor-pointer p-0"
+                      >
+                        <Plus size={13} />
+                        <span>Add GitHub, LinkedIn & Resume CV in Edit Profile</span>
+                      </button>
+                    ) : (
+                      <span className="text-xs text-ink/40 italic">No external links provided</span>
+                    )
+                  )}
+                </div>
               </div>
             </section>
 
-            {/* 3. FREELANCER PROFESSIONAL STATS (5 Real KPI Cards) */}
+            {/* FREELANCER PROFESSIONAL STATS (5 Real KPI Cards) */}
             <section aria-label="Freelancer KPIs">
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-5">
                 {/* 1. Completed Projects */}
@@ -1241,74 +1392,16 @@ export default function Profile() {
             {/* TWO-COLUMN FREELANCER WORKSPACE */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               
-              {/* LEFT COLUMN: Skills, Portfolio, Services, Reviews, Work History */}
+              {/* LEFT COLUMN: Portfolio, Certifications, Reviews, Work History (8 cols) */}
               <div className="lg:col-span-8 space-y-8">
                 
-                {/* 4. SKILLS & TECH STACK (100% REAL FROM PROFILE) */}
-                <section className="bg-white rounded-[28px] p-6 sm:p-8 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-4">
-                    <div>
-                      <h2 className="font-display text-xl sm:text-2xl font-bold text-ink tracking-tight">
-                        Skills & Tech Stack
-                      </h2>
-                      <p className="text-xs sm:text-sm text-ink/50 font-medium mt-0.5">
-                        Verified programming languages, frameworks, libraries, and toolsets.
-                      </p>
-                    </div>
-                    {isOwner && (
-                      <button
-                        onClick={() => navigate('/profile/edit')}
-                        className="btn-secondary !py-2 !px-3.5 !text-xs self-start sm:self-auto inline-flex items-center gap-1.5"
-                      >
-                        <Edit3 size={13} />
-                        <span>Update Skills</span>
-                      </button>
-                    )}
-                  </div>
-
-                  {(!p.skills || p.skills.length === 0) ? (
-                    <div className="text-center py-8 px-4 rounded-2xl bg-soft/40 border border-border/50 space-y-2">
-                      <Code size={28} className="mx-auto text-ink/30" />
-                      <p className="text-xs font-bold text-ink/70">No skills added yet</p>
-                      <p className="text-[11px] text-ink/45 max-w-md mx-auto">
-                        {isOwner
-                          ? 'Add your technical skills, frameworks, and programming languages in Edit Profile to help clients find your services.'
-                          : 'This creator has not listed any skills on their profile yet.'}
-                      </p>
-                      {isOwner && (
-                        <button
-                          onClick={() => navigate('/profile/edit')}
-                          className="btn-primary !py-1.5 !px-3.5 !text-xs mt-2 inline-flex items-center gap-1"
-                        >
-                          <Plus size={13} />
-                          <span>Add Skills</span>
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap gap-2.5">
-                      {p.skills.map((skill: string, idx: number) => (
-                        <div
-                          key={idx}
-                          className="group bg-soft hover:bg-white hover:border-purple/40 hover:shadow-xs px-3.5 py-2 rounded-2xl border border-border/60 transition-all flex items-center gap-2 cursor-default"
-                        >
-                          <span className="w-2 h-2 rounded-full bg-purple/60 group-hover:bg-purple group-hover:scale-125 transition-all" />
-                          <span className="text-xs sm:text-sm font-bold text-ink group-hover:text-purple transition-colors">
-                            {skill}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </section>
-
-                {/* 5. PORTFOLIO PROJECTS (PORTFOLIO & CASE STUDIES) */}
+                {/* SECTION 4: PORTFOLIO PROJECTS */}
                 <section className="bg-white rounded-[28px] p-6 sm:p-8 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-4">
                     <div>
                       <div className="flex items-center gap-2">
                         <h2 className="font-display text-xl sm:text-2xl font-bold text-ink tracking-tight">
-                          Portfolio & Case Studies
+                          Portfolio Projects
                         </h2>
                         {p.portfolio && p.portfolio.length > 0 && (
                           <span className="bg-purple/10 text-purple text-xs font-bold px-2.5 py-0.5 rounded-full">
@@ -1337,8 +1430,8 @@ export default function Profile() {
                       <p className="text-xs font-bold text-ink/70">No portfolio projects added yet</p>
                       <p className="text-[11px] text-ink/45 max-w-md mx-auto">
                         {isOwner
-                          ? 'Add live demos and project links in Edit Profile to show clients your engineering and design work.'
-                          : 'This creator has not published public case studies yet.'}
+                          ? 'Add live demos, GitHub repositories, and tech stacks in Edit Profile to show clients your work.'
+                          : 'This creator has not published public portfolio projects yet.'}
                       </p>
                       {isOwner && (
                         <button
@@ -1365,20 +1458,32 @@ export default function Profile() {
                                   alt={item.title}
                                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                 />
-                                {item.status && (
-                                  <span className="absolute top-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase bg-black/60 text-white backdrop-blur-xs">
-                                    {item.status}
+                                {item.duration && (
+                                  <span className="absolute top-2.5 right-2.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-black/60 text-white backdrop-blur-xs">
+                                    {item.duration}
                                   </span>
                                 )}
                               </div>
                             ) : null}
 
-                            <h4 className="font-bold text-base text-ink group-hover:text-purple transition-colors mb-1.5">
-                              {item.title}
-                            </h4>
+                            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+                              <h4 className="font-bold text-base text-ink group-hover:text-purple transition-colors">
+                                {item.title}
+                              </h4>
+                              {item.roleInProject && (
+                                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple/10 text-purple border border-purple/20">
+                                  {item.roleInProject}
+                                </span>
+                              )}
+                              {!item.url && item.duration && (
+                                <span className="text-[10px] font-medium text-ink/50 bg-white px-2 py-0.5 rounded-full border border-border/40">
+                                  {item.duration}
+                                </span>
+                              )}
+                            </div>
 
                             {item.description && (
-                              <p className="text-xs text-ink/70 leading-relaxed line-clamp-3 mb-3">
+                              <p className="text-xs text-ink/70 leading-relaxed line-clamp-3 mb-3 font-normal">
                                 {item.description}
                               </p>
                             )}
@@ -1397,8 +1502,8 @@ export default function Profile() {
                             )}
                           </div>
 
-                          <div className="flex items-center gap-3 pt-3 border-t border-border/40">
-                            {item.projectLink ? (
+                          <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-border/40">
+                            {item.projectLink && (
                               <a
                                 href={item.projectLink}
                                 target="_blank"
@@ -1408,8 +1513,17 @@ export default function Profile() {
                                 <span>Live Demo</span>
                                 <ExternalLink size={12} />
                               </a>
-                            ) : (
-                              <span className="text-xs font-medium text-ink/40">Project Verified</span>
+                            )}
+                            {item.githubLink && (
+                              <a
+                                href={item.githubLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs font-bold text-ink/70 hover:text-ink inline-flex items-center gap-1.5"
+                              >
+                                <Github size={12} />
+                                <span>Repository</span>
+                              </a>
                             )}
                           </div>
                         </div>
@@ -1418,78 +1532,97 @@ export default function Profile() {
                   )}
                 </section>
 
-                {/* 7. MY SERVICES (ACTIVE SERVICES CREATED BY USER) */}
+                {/* SECTION 6: CERTIFICATIONS & ACHIEVEMENTS */}
                 <section className="bg-white rounded-[28px] p-6 sm:p-8 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-4">
                     <div>
-                      <h2 className="font-display text-xl sm:text-2xl font-bold text-ink tracking-tight">
-                        My Services
-                      </h2>
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-display text-xl sm:text-2xl font-bold text-ink tracking-tight">
+                          Certifications & Achievements
+                        </h2>
+                        {p.certifications && p.certifications.length > 0 && (
+                          <span className="bg-purple/10 text-purple text-xs font-bold px-2.5 py-0.5 rounded-full">
+                            {p.certifications.length} Credentials
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs sm:text-sm text-ink/50 font-medium mt-0.5">
-                        Active service offerings and project commissions published by this creator.
+                        Verified professional certifications, degrees, and recognized industry badges.
                       </p>
                     </div>
                     {isOwner && (
                       <button
-                        onClick={() => navigate('/post-gig')}
+                        onClick={() => navigate('/profile/edit')}
                         className="btn-secondary !py-2 !px-3.5 !text-xs self-start sm:self-auto inline-flex items-center gap-1.5"
                       >
                         <Plus size={14} />
-                        <span>Publish Service</span>
+                        <span>Manage Certifications</span>
                       </button>
                     )}
                   </div>
 
-                  {(!activeGigs || activeGigs.length === 0) ? (
+                  {(!p.certifications || p.certifications.length === 0) ? (
                     <div className="text-center py-10 px-4 rounded-2xl bg-soft/40 border border-border/50 space-y-2">
-                      <Briefcase size={28} className="mx-auto text-ink/30" />
-                      <p className="text-xs font-bold text-ink/70">No services published yet</p>
+                      <Award size={28} className="mx-auto text-ink/30" />
+                      <p className="text-xs font-bold text-ink/70">No certifications added yet</p>
                       <p className="text-[11px] text-ink/45 max-w-md mx-auto">
                         {isOwner
-                          ? 'Publish a service or gig to showcase your packaged solutions to clients looking for talent.'
-                          : 'This creator has not published any active service packages yet.'}
+                          ? 'Add industry-standard certifications or credentials in Edit Profile to demonstrate verified competence.'
+                          : 'This creator has not listed any public certifications yet.'}
                       </p>
+                      {isOwner && (
+                        <button
+                          onClick={() => navigate('/profile/edit')}
+                          className="btn-primary !py-1.5 !px-3.5 !text-xs mt-2 inline-flex items-center gap-1"
+                        >
+                          <Plus size={13} />
+                          <span>Add Certification</span>
+                        </button>
+                      )}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {activeGigs.map((gig: any) => (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {p.certifications.map((cert: any, idx: number) => (
                         <div
-                          key={gig.id}
-                          onClick={() => navigate(`/gigs/${gig.id}`)}
-                          className="bg-soft/50 rounded-2xl p-5 border border-border/60 hover:bg-white hover:border-purple/30 hover:shadow-sm transition-all flex flex-col justify-between space-y-4 group cursor-pointer"
+                          key={idx}
+                          className="bg-soft/40 rounded-2xl p-5 border border-border/50 hover:bg-white hover:border-purple/30 hover:shadow-xs transition-all flex flex-col justify-between space-y-3 group"
                         >
                           <div>
                             <div className="flex items-center justify-between mb-2">
                               <span className="text-[10px] font-bold uppercase tracking-wider text-purple bg-purple/10 px-2.5 py-0.5 rounded-full">
-                                {gig.category}
+                                {cert.issuer}
                               </span>
-                              <ArrowUpRight
-                                size={15}
-                                className="text-ink/30 group-hover:text-purple group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all"
-                              />
+                              {cert.issueDate && (
+                                <span className="text-[11px] font-medium text-ink/45">
+                                  {cert.issueDate}
+                                </span>
+                              )}
                             </div>
-
-                            <h3 className="font-bold text-sm sm:text-base text-ink group-hover:text-purple transition-colors mb-1.5">
-                              {gig.title}
-                            </h3>
+                            <h4 className="font-bold text-sm sm:text-base text-ink group-hover:text-purple transition-colors mb-1">
+                              {cert.name}
+                            </h4>
                           </div>
 
-                          <div className="pt-3 border-t border-border/40 flex items-center justify-between text-xs">
-                            <div>
-                              <span className="text-[10px] font-bold text-ink/40 uppercase tracking-wider block">Budget</span>
-                              <span className="font-display font-extrabold text-base text-ink">{gig.budget}</span>
+                          {cert.credentialUrl && (
+                            <div className="pt-2 border-t border-border/40">
+                              <a
+                                href={cert.credentialUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs font-bold text-purple hover:underline inline-flex items-center gap-1.5"
+                              >
+                                <span>Verify Credential</span>
+                                <ExternalLink size={12} />
+                              </a>
                             </div>
-                            <span className="font-bold text-purple bg-purple/10 px-2.5 py-0.5 rounded-full text-[11px]">
-                              {gig.proposalsCount} bids
-                            </span>
-                          </div>
+                          )}
                         </div>
                       ))}
                     </div>
                   )}
                 </section>
 
-                {/* 6. CLIENT REVIEWS & RATINGS (100% REAL REVIEWS) */}
+                {/* CLIENT REVIEWS & RATINGS (100% REAL REVIEWS) */}
                 <section className="bg-white rounded-[28px] p-6 sm:p-8 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
                   <div className="flex items-center justify-between border-b border-border/60 pb-4">
                     <div>
@@ -1529,10 +1662,14 @@ export default function Profile() {
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
                               <div
-                                className="w-10 h-10 rounded-[14px] flex items-center justify-center font-clash font-bold text-xs text-ink shadow-xs"
+                                className="w-10 h-10 rounded-[14px] flex items-center justify-center font-clash font-bold text-xs text-ink shadow-xs overflow-hidden"
                                 style={{ backgroundColor: rev.avatarColor || '#22D3EE' }}
                               >
-                                {rev.initials}
+                                {rev.avatar ? (
+                                  <img src={rev.avatar} alt={rev.name} className="w-full h-full object-cover" />
+                                ) : (
+                                  rev.initials
+                                )}
                               </div>
                               <div>
                                 <h4 className="font-bold text-sm text-ink">{rev.name}</h4>
@@ -1566,7 +1703,7 @@ export default function Profile() {
                   )}
                 </section>
 
-                {/* 8. WORK HISTORY (100% REAL ORDERS) */}
+                {/* WORK HISTORY (100% REAL ORDERS) */}
                 <section className="bg-white rounded-[28px] p-6 sm:p-8 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/60 pb-4">
                     <div>
@@ -1647,10 +1784,156 @@ export default function Profile() {
                 </section>
               </div>
 
-              {/* RIGHT COLUMN: 9. Earnings & Achievements, Preferences, 10. Profile CTA */}
+              {/* RIGHT COLUMN: Work Preferences, Verification & Trust, Availability & Response Time (4 cols) */}
               <div className="lg:col-span-4 space-y-6">
                 
-                {/* 9. EARNINGS & ACHIEVEMENTS CARD (REAL STATS ONLY) */}
+                {/* SECTION 5: WORK PREFERENCES */}
+                <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-4">
+                  <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                    <h3 className="font-display font-bold text-lg text-ink">
+                      Work Preferences
+                    </h3>
+                    <Briefcase size={18} className="text-purple" />
+                  </div>
+
+                  <div className="space-y-3 text-xs font-medium">
+                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
+                      <span className="text-ink/60">Availability Status</span>
+                      <span className="inline-flex items-center gap-1.5 font-bold text-emerald-800 bg-emerald-100/90 px-2.5 py-0.5 rounded-full border border-emerald-200/60 text-[11px]">
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          (p.availabilityStatus || 'Available Now') === 'Unavailable' ? 'bg-ink/40' : 'bg-emerald-500 animate-pulse'
+                        }`} />
+                        <span>{p.availabilityStatus || 'Available Now'}</span>
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
+                      <span className="text-ink/60">Hourly Rate</span>
+                      <strong className="text-ink font-bold text-sm">
+                        {p.hourlyRate ? `₹${Number(p.hourlyRate).toLocaleString('en-IN')} / hr` : 'Not specified'}
+                      </strong>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-soft space-y-2">
+                      <span className="text-ink/60 block text-[11px] font-bold uppercase tracking-wider">Preferred Work Types</span>
+                      {p.preferredWorkTypes && p.preferredWorkTypes.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {p.preferredWorkTypes.map((type: string, tidx: number) => (
+                            <span
+                              key={tidx}
+                              className="text-[10px] font-bold bg-white text-ink/75 px-2.5 py-1 rounded-full border border-border/60"
+                            >
+                              {type}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-ink/50 italic">Open to all project contracts</p>
+                      )}
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
+                      <span className="text-ink/60">Working Location</span>
+                      <strong className="text-ink font-bold">{displayLocation}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 7: VERIFICATION & TRUST (READ-ONLY SYSTEM BADGES) */}
+                <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-4">
+                  <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                    <h3 className="font-display font-bold text-lg text-ink">
+                      Verification & Trust
+                    </h3>
+                    <ShieldCheck size={18} className="text-emerald-600" />
+                  </div>
+
+                  <div className="space-y-2.5 text-xs font-semibold">
+                    <div className="p-2.5 rounded-xl bg-soft/60 flex items-center justify-between border border-border/40">
+                      <span className="flex items-center gap-2 text-ink/80">
+                        <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                        <span>Email Verified</span>
+                      </span>
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/50">
+                        System Verified
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-soft/60 flex items-center justify-between border border-border/40">
+                      <span className="flex items-center gap-2 text-ink/80">
+                        <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                        <span>Phone Verified</span>
+                      </span>
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/50">
+                        System Verified
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-soft/60 flex items-center justify-between border border-border/40">
+                      <span className="flex items-center gap-2 text-ink/80">
+                        <CheckCircle2 size={14} className={p.linkedinUrl ? 'text-emerald-600 shrink-0' : 'text-ink/30 shrink-0'} />
+                        <span>LinkedIn Connected</span>
+                      </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        p.linkedinUrl
+                          ? 'text-emerald-700 bg-emerald-50 border border-emerald-200/50'
+                          : 'text-ink/40 bg-paper border border-border/40'
+                      }`}>
+                        {p.linkedinUrl ? 'Connected' : 'Pending'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-soft/60 flex items-center justify-between border border-border/40">
+                      <span className="flex items-center gap-2 text-ink/80">
+                        <CheckCircle2 size={14} className={p.githubUrl ? 'text-emerald-600 shrink-0' : 'text-ink/30 shrink-0'} />
+                        <span>GitHub Connected</span>
+                      </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        p.githubUrl
+                          ? 'text-emerald-700 bg-emerald-50 border border-emerald-200/50'
+                          : 'text-ink/40 bg-paper border border-border/40'
+                      }`}>
+                        {p.githubUrl ? 'Connected' : 'Pending'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-soft/60 flex items-center justify-between border border-border/40">
+                      <span className="flex items-center gap-2 text-ink/80">
+                        <ShieldCheck size={14} className="text-emerald-600 shrink-0" />
+                        <span>Identity Verified</span>
+                      </span>
+                      <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/50">
+                        Escrow KYC
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SECTION 8: AVAILABILITY & RESPONSE TIME */}
+                <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-4">
+                  <div className="flex items-center justify-between border-b border-border/60 pb-3">
+                    <h3 className="font-display font-bold text-lg text-ink">
+                      Availability & Response Time
+                    </h3>
+                    <Clock size={18} className="text-amber-500" />
+                  </div>
+
+                  <div className="space-y-3 text-xs font-medium">
+                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
+                      <span className="text-ink/60">Response Cadence</span>
+                      <strong className="text-emerald-700 font-bold">{p.responseTime || '< 2 Hours'}</strong>
+                    </div>
+
+                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
+                      <span className="text-ink/60">Milestone Protection</span>
+                      <span className="font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/50">
+                        100% Escrow Active
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* EARNINGS & ACHIEVEMENTS CARD */}
                 <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-5">
                   <div className="flex items-center justify-between border-b border-border/60 pb-3.5">
                     <h3 className="font-display font-bold text-lg text-ink">
@@ -1679,10 +1962,10 @@ export default function Profile() {
                       </span>
                       <span className="font-bold text-purple bg-purple/10 px-2.5 py-0.5 rounded-full text-xs">
                         {metrics.totalReviews >= 5 && metrics.averageRating >= 4.5
-                          ? 'Top Rated Creator'
+                          ? 'Top Rated Specialist'
                           : metrics.completedOrdersCount > 0
-                          ? 'Verified Creator'
-                          : 'New Creator'}
+                          ? 'Verified Freelancer'
+                          : 'New Talent'}
                       </span>
                     </div>
 
@@ -1716,65 +1999,6 @@ export default function Profile() {
                   </div>
                 </div>
 
-                {/* FREELANCE WORKING PREFERENCES */}
-                <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-4">
-                  <h3 className="font-display font-bold text-lg text-ink border-b border-border/60 pb-3">
-                    Working Preferences
-                  </h3>
-
-                  <div className="space-y-3 text-xs font-medium">
-                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
-                      <span className="text-ink/60">Hourly Rate</span>
-                      <strong className="text-ink font-bold">
-                        {p.hourlyRate ? `₹${Number(p.hourlyRate).toLocaleString('en-IN')} / hr` : 'Not specified'}
-                      </strong>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
-                      <span className="text-ink/60">Location</span>
-                      <strong className="text-ink font-bold">{displayLocation}</strong>
-                    </div>
-
-                    <div className="p-3 rounded-xl bg-soft flex items-center justify-between">
-                      <span className="text-ink/60">Response Cadence</span>
-                      <strong className="text-emerald-700 font-bold">{p.responseTime || '< 2 Hours'}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 10. PROFILE CTA CARD */}
-                <div className="bg-gradient-to-br from-purple/10 via-soft to-cyan/10 rounded-[28px] p-6 sm:p-7 border border-purple/20 space-y-4 shadow-sm">
-                  <div className="space-y-1">
-                    <span className="eyebrow text-purple">READY TO COLLABORATE?</span>
-                    <h3 className="font-display font-extrabold text-xl text-ink">
-                      Work with {displayName}
-                    </h3>
-                    <p className="text-xs text-ink/70 leading-relaxed font-normal">
-                      Pitch your project brief directly or hire for a milestone with 100% escrow protection.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2.5 pt-2">
-                    <button
-                      onClick={() => navigate('/post-gig')}
-                      className="w-full btn-primary !py-3 !text-xs justify-center shadow-md shadow-purple/15"
-                    >
-                      <Send size={14} />
-                      <span>Hire Me / Invite to Project</span>
-                    </button>
-
-                    <button
-                      onClick={() => {
-                        toast.info(`Starting conversation with ${displayName}`);
-                        navigate('/messages');
-                      }}
-                      className="w-full btn-secondary !py-2.5 !text-xs justify-center"
-                    >
-                      <MessageSquare size={14} />
-                      <span>Send Direct Message</span>
-                    </button>
-                  </div>
-                </div>
 
                 {/* ESCROW & VERIFICATION BADGE CARD */}
                 <div className="bg-white rounded-[28px] p-6 border border-border/70 space-y-3">

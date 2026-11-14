@@ -4,7 +4,8 @@ import { useAuthStore } from '../store/authStore';
 import api from '../lib/axios';
 import {
   ChevronRight, AlertCircle, FolderKanban,
-  User, Briefcase, CheckCircle2, ExternalLink
+  User, Briefcase, CheckCircle2, ExternalLink,
+  FileCheck2, RefreshCw
 } from 'lucide-react';
 import { Skeleton } from '../components/ui/skeleton';
 
@@ -39,6 +40,8 @@ export default function Orders() {
 
   const statusStyles: Record<string, { bg: string; label: string }> = {
     active: { bg: 'bg-purple/10 text-purple border-purple/20', label: 'Active' },
+    delivered: { bg: 'bg-blue-50 text-blue-700 border-blue-200/50', label: 'Delivered - Under Review' },
+    revision_requested: { bg: 'bg-amber-50 text-amber-700 border-amber-200/50', label: 'Revision Requested' },
     completed: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-200/50', label: 'Completed' },
     cancelled: { bg: 'bg-coral/10 text-coral border-coral/20', label: 'Cancelled' },
     disputed: { bg: 'bg-orange/10 text-orange border-orange/20', label: 'Disputed' },
@@ -167,33 +170,46 @@ export default function Orders() {
                     <span className="font-display font-extrabold text-sm text-ink">₹{order.totalAmount?.toLocaleString('en-IN')}</span>
                   </div>
                   <div className="bg-soft/70 p-3 rounded-xl border border-border/50 col-span-2 sm:col-span-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-ink/40 block mb-0.5">Milestones</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-ink/40 block mb-0.5">Deliverables</span>
                     <span className="font-bold text-sm text-ink">
-                      {order.milestones?.filter((m: any) => m.status === 'approved' || m.status === 'paid').length || 0} / {order.milestones?.length || 0} Completed
+                      {order.deliverables?.length || 0} Submitted
                     </span>
                   </div>
                 </div>
 
-                {/* Open Workspace */}
-                {order.status === 'active' && (
-                  <div className="mt-4 pt-3 border-t border-border/50 flex items-center justify-end">
-                    <button
-                      onClick={() => navigate(`/workspace/${order._id}`)}
-                      className="btn-primary !py-2 !px-4 !text-xs"
-                    >
-                      <ExternalLink size={14} />
-                      <span>Open Workspace</span>
-                    </button>
+                {/* Open Workspace - Every order card includes this */}
+                <div className="mt-4 pt-3 border-t border-border/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    {order.status === 'completed' ? (
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                        <CheckCircle2 size={14} />
+                        <span>Completed on {order.completedAt ? formatDate(order.completedAt) : 'N/A'}</span>
+                      </span>
+                    ) : order.status === 'delivered' ? (
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-blue-700">
+                        <FileCheck2 size={14} />
+                        <span>Deliverables awaiting client review</span>
+                      </span>
+                    ) : order.status === 'revision_requested' ? (
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-amber-700">
+                        <RefreshCw size={14} />
+                        <span>Revision requested</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1.5 text-xs font-semibold text-ink/50">
+                        <span>Sprint in progress</span>
+                      </span>
+                    )}
                   </div>
-                )}
 
-                {/* Completed badge */}
-                {order.status === 'completed' && (
-                  <div className="mt-4 pt-3 border-t border-border/50 flex items-center gap-2 text-xs font-semibold text-emerald-700">
-                    <CheckCircle2 size={14} />
-                    <span>Order completed on {order.completedAt ? formatDate(order.completedAt) : 'N/A'}</span>
-                  </div>
-                )}
+                  <button
+                    onClick={() => navigate(`/dashboard?tab=Workspace&orderId=${order._id}`)}
+                    className="btn-primary !py-2 !px-4 !text-xs self-end sm:self-auto shrink-0"
+                  >
+                    <ExternalLink size={14} />
+                    <span>Open Workspace</span>
+                  </button>
+                </div>
               </div>
             );
           })}

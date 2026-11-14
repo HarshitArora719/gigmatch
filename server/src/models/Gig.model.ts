@@ -51,7 +51,11 @@ const GigSchema = new Schema<IGig>({
 
 // Text index for search
 GigSchema.index({ title: 'text', description: 'text', tags: 'text' });
+GigSchema.index({ status: 1, createdAt: -1 });
+GigSchema.index({ status: 1, category: 1, createdAt: -1 });
+GigSchema.index({ status: 1, budget: 1, createdAt: -1 });
+GigSchema.index({ client: 1, createdAt: -1 });
 GigSchema.index({ client: 1, status: 1, createdAt: -1 });
-GigSchema.index({ status: 1, category: 1, budget: 1 });
+GigSchema.index({ createdAt: -1 });
 
 export default mongoose.model<IGig>('Gig', GigSchema);

@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Search, Sparkles, ArrowUpRight, Briefcase } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { useAuthStore } from '../store/authStore';
+import { toast } from 'sonner';
 import AnimatedSection from '../components/AnimatedSection';
 import api from '../lib/axios';
 
@@ -67,18 +68,40 @@ const journeySteps = [
 
 export default function Home() {
   const navigate = useNavigate();
-  const { setAuthModal } = useAuthStore();
+  const { user, setAuthModal } = useAuthStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
-  const [featuredGigs, setFeaturedGigs] = useState<any[]>([]);
-  const [loadingGigs, setLoadingGigs] = useState(true);
+  const [featuredGigs, setFeaturedGigs] = useState<any[]>(() => {
+    try {
+      const cached = sessionStorage.getItem('gm_cached_home_gigs');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
+  const [loadingGigs, setLoadingGigs] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('gm_cached_home_gigs');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return false;
+      }
+    } catch (e) {}
+    return true;
+  });
 
   useEffect(() => {
     const fetchGigs = async () => {
       try {
-        setLoadingGigs(true);
+        if (featuredGigs.length === 0) setLoadingGigs(true);
         const res = await api.get('/api/gigs?limit=3');
-        setFeaturedGigs(res.data.data.gigs || []);
+        const gigsList = res.data?.data?.gigs || [];
+        setFeaturedGigs(gigsList);
+        try {
+          sessionStorage.setItem('gm_cached_home_gigs', JSON.stringify(gigsList));
+        } catch (e) {}
       } catch (err) {
         console.error('Failed to fetch featured gigs:', err);
       } finally {
@@ -242,7 +265,13 @@ export default function Home() {
                 Be the first to create an open brief and receive proposals from creative pros.
               </p>
               <button
-                onClick={() => navigate('/post-gig')}
+                onClick={() => {
+                  if (user?.role === 'freelancer') {
+                    toast.error('Access restricted: This area is only available to clients.', { id: 'access-restricted' });
+                    return;
+                  }
+                  navigate('/post-gig');
+                }}
                 className="btn-primary !py-2 !px-5 !text-xs mt-2"
               >
                 Post a Gig

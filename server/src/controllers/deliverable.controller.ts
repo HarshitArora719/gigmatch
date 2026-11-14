@@ -97,8 +97,8 @@ export const getOrderDeliverables = asyncHandler(async (req: any, res: Response)
   }
 
   const deliverables = await Deliverable.find({ order: orderId })
-    .populate('uploadedBy', 'name')
-    .populate('reviewedBy', 'name')
+    .populate('uploadedBy', 'name avatar avatarColor')
+    .populate('reviewedBy', 'name avatar avatarColor')
     .sort({ createdAt: -1 });
 
   return ApiResponse.success(res, { deliverables });
