@@ -76,11 +76,11 @@ export default function DemoPaymentModal({
               <span className="font-bold text-ink text-sm">₹{details.totalAmount.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex items-center justify-between text-ink/60">
-              <span>Platform Commission (25%):</span>
+              <span>Platform Commission (10%):</span>
               <span className="font-medium text-purple">₹{details.platformCommission.toLocaleString('en-IN')}</span>
             </div>
             <div className="flex items-center justify-between text-ink/60">
-              <span>Freelancer Payout (75% net):</span>
+              <span>Freelancer Payout (90% net):</span>
               <span className="font-medium text-emerald-600">₹{details.freelancerEarnings.toLocaleString('en-IN')}</span>
             </div>
             <div className="pt-2 border-t border-border/50 flex items-center justify-between font-bold text-ink text-sm">

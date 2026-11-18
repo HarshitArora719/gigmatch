@@ -31,30 +31,48 @@ interface DashboardData {
 }
 
 export function useDashboardData(user: { id: string; role: string } | null) {
-  const [data, setData] = useState<DashboardData>({
-    orders: [],
-    gigs: [],
-    proposals: [],
-    reviews: [],
-    totalGigsPosted: 0,
-    activeGigs: 0,
-    totalProposalsReceived: 0,
-    activeOrders: 0,
-    completedOrders: 0,
-    totalProposalsSent: 0,
-    acceptedProposals: 0,
-    reviewsReceived: 0,
-    totalSpending: 0,
-    pendingPayments: 0,
-    completedPayments: 0,
-    loading: false,
-    error: null,
+  const cacheKey = user ? `gm_dashboard_${user.id}` : null;
+
+  const [data, setData] = useState<DashboardData>(() => {
+    if (cacheKey) {
+      try {
+        const cached = sessionStorage.getItem(cacheKey);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && typeof parsed === 'object') {
+            return { ...parsed, loading: false, error: null };
+          }
+        }
+      } catch {}
+    }
+    return {
+      orders: [],
+      gigs: [],
+      proposals: [],
+      reviews: [],
+      totalGigsPosted: 0,
+      activeGigs: 0,
+      totalProposalsReceived: 0,
+      activeOrders: 0,
+      completedOrders: 0,
+      totalProposalsSent: 0,
+      acceptedProposals: 0,
+      reviewsReceived: 0,
+      totalSpending: 0,
+      pendingPayments: 0,
+      completedPayments: 0,
+      loading: !cacheKey,
+      error: null,
+    };
   });
 
   const fetchData = useCallback(async () => {
     if (!user) return;
 
-    setData(prev => ({ ...prev, loading: true, error: null }));
+    // Only set full loading if no cached data exists
+    if (!data.orders.length && !data.gigs.length && !data.proposals.length) {
+      setData(prev => ({ ...prev, loading: true, error: null }));
+    }
 
     try {
       const promises: Promise<any>[] = [
@@ -121,7 +139,7 @@ export function useDashboardData(user: { id: string; role: string } | null) {
         return sum;
       }, 0);
 
-      setData({
+      const computedState = {
         orders,
         gigs,
         proposals,
@@ -139,7 +157,13 @@ export function useDashboardData(user: { id: string; role: string } | null) {
         completedPayments,
         loading: false,
         error: null,
-      });
+      };
+
+      if (cacheKey) {
+        try { sessionStorage.setItem(cacheKey, JSON.stringify(computedState)); } catch {}
+      }
+
+      setData(computedState);
     } catch (err: any) {
       setData(prev => ({
         ...prev,

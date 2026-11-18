@@ -12,7 +12,13 @@ import Payment from '../models/Payment.model';
 import { getIO } from '../config/socket';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiResponse } from '../utils/apiResponse';
-import { createEscrow, releaseEscrow, isRazorpayConfigured } from '../services/escrow.service';
+import {
+  createEscrow,
+  releaseEscrow,
+  isRazorpayConfigured,
+  PLATFORM_COMMISSION_RATE,
+  transferMilestonePayout,
+} from '../services/escrow.service';
 import { completeOrderActivation } from './payment.controller';
 
 // ─── Accept Proposal & Create Order ─────────────────────────────────────────
@@ -45,7 +51,7 @@ export const acceptProposal = asyncHandler(async (req: any, res: Response) => {
   }
 
   const totalAmount = proposal.proposedPrice;
-  const platformCommission = Math.round(totalAmount * 0.25);
+  const platformCommission = Math.round(totalAmount * PLATFORM_COMMISSION_RATE);
   const freelancerEarnings = totalAmount - platformCommission;
 
   // Create demo Payment record
@@ -199,22 +205,32 @@ export const getOrderById = asyncHandler(async (req: any, res: Response) => {
   // Ensure avatars and avatarColors are populated from Profile if not present on User
   const clientObj = order.client as any;
   const freelancerObj = order.freelancer as any;
-  if ((clientObj && !clientObj.avatar) || (freelancerObj && !freelancerObj.avatar)) {
-    const needed = [];
-    if (clientObj && !clientObj.avatar) needed.push(clientObj._id);
-    if (freelancerObj && !freelancerObj.avatar) needed.push(freelancerObj._id);
-    const profiles = await Profile.find({ user: { $in: needed } }).select('user avatar avatarColor').lean();
-    profiles.forEach((p: any) => {
-      if (clientObj && !clientObj.avatar && String(clientObj._id) === String(p.user)) {
-        clientObj.avatar = p.avatar || '';
-        if (p.avatarColor) clientObj.avatarColor = p.avatarColor;
+  const profileUserIds = [clientObj?._id, freelancerObj?._id].filter(Boolean);
+  const profiles = await Profile.find({ user: { $in: profileUserIds } })
+    .select('user avatar avatarColor payoutDetails')
+    .lean();
+
+  profiles.forEach((p: any) => {
+    if (clientObj && String(clientObj._id) === String(p.user)) {
+      if (!clientObj.avatar) clientObj.avatar = p.avatar || '';
+      if (p.avatarColor) clientObj.avatarColor = p.avatarColor;
+    }
+    if (freelancerObj && String(freelancerObj._id) === String(p.user)) {
+      if (!freelancerObj.avatar) freelancerObj.avatar = p.avatar || '';
+      if (p.avatarColor) freelancerObj.avatarColor = p.avatarColor;
+      // Provide a safe masked payout destination label for display
+      if (p.payoutDetails?.payoutMethod === 'bank_transfer' && p.payoutDetails.accountNumber) {
+        const masked = p.payoutDetails.accountNumber.length > 4
+          ? `••••${p.payoutDetails.accountNumber.slice(-4)}`
+          : p.payoutDetails.accountNumber;
+        freelancerObj.payoutDestination = `${p.payoutDetails.bankName || 'Bank'} (${masked})`;
+      } else if (p.payoutDetails?.upiId) {
+        freelancerObj.payoutDestination = `UPI (${p.payoutDetails.upiId})`;
+      } else {
+        freelancerObj.payoutDestination = 'Direct IMPS / UPI Transfer';
       }
-      if (freelancerObj && !freelancerObj.avatar && String(freelancerObj._id) === String(p.user)) {
-        freelancerObj.avatar = p.avatar || '';
-        if (p.avatarColor) freelancerObj.avatarColor = p.avatarColor;
-      }
-    });
-  }
+    }
+  });
 
   // Normalize deliverables for backward compatibility with legacy DB records
   const rawOrder = order.toObject ? order.toObject() : order;
@@ -259,8 +275,9 @@ export const getOrderById = asyncHandler(async (req: any, res: Response) => {
     order: normalizedOrder,
     financial: {
       totalAmount: order.totalAmount,
-      platformCommission: order.platformCommission || Math.round((order.totalAmount || 0) * 0.25),
-      freelancerEarnings: order.freelancerEarnings || ((order.totalAmount || 0) - Math.round((order.totalAmount || 0) * 0.25)),
+      platformCommission: order.platformCommission || Math.round((order.totalAmount || 0) * PLATFORM_COMMISSION_RATE),
+      freelancerEarnings: order.freelancerEarnings || ((order.totalAmount || 0) - Math.round((order.totalAmount || 0) * PLATFORM_COMMISSION_RATE)),
+      commissionRate: PLATFORM_COMMISSION_RATE,
       paidAmount,
       remainingAmount,
     },
@@ -334,6 +351,10 @@ export const updateMilestoneStatus = asyncHandler(async (req: any, res: Response
   order.milestones[idx].status = status;
   if (status === 'approved') {
     order.milestones[idx].paidAt = new Date();
+    // Advance next milestone to 'in_progress' if pending
+    if (idx + 1 < order.milestones.length && order.milestones[idx + 1].status === 'pending') {
+      order.milestones[idx + 1].status = 'in_progress';
+    }
   }
 
   // Check if all milestones are approved
@@ -756,12 +777,15 @@ export const approveAndRelease = asyncHandler(async (req: any, res: Response) =>
     return ApiResponse.error(res, 'Cannot release payment: At least one deliverable must be submitted before payment release', 400);
   }
 
-  // Attempt escrow release via payment service
-  const escrowResult = await releaseEscrow(orderId, order.totalAmount);
-
-  if (!escrowResult.success) {
-    return ApiResponse.error(res, escrowResult.message || 'Failed to release escrow', 500);
-  }
+  // Fetch freelancer profile for payout destination & execute automated payout
+  const freelancerProfile = await Profile.findOne({ user: order.freelancer }).select('payoutDetails').lean();
+  const payoutRes = await transferMilestonePayout({
+    orderId: order._id.toString(),
+    amount: order.totalAmount,
+    freelancerId: order.freelancer.toString(),
+    payoutDetails: freelancerProfile?.payoutDetails,
+    escrowPaymentId: order.razorpayPaymentId,
+  });
 
   // Mark latest deliverable as approved
   if (order.deliverables && order.deliverables.length > 0) {
@@ -777,7 +801,7 @@ export const approveAndRelease = asyncHandler(async (req: any, res: Response) =>
     }
   });
 
-  const platformCommission = Math.round(order.totalAmount * 0.25);
+  const platformCommission = Math.round(order.totalAmount * PLATFORM_COMMISSION_RATE);
   const freelancerEarnings = order.totalAmount - platformCommission;
 
   order.platformCommission = platformCommission;
@@ -801,6 +825,11 @@ export const approveAndRelease = asyncHandler(async (req: any, res: Response) =>
     paymentGateway: order.paymentMethod || (isRazorpayConfigured() ? 'razorpay' : 'demo'),
     status: 'captured',
     type: 'escrow_release',
+    razorpayTransferId: payoutRes.transferId,
+    notes: {
+      destination: payoutRes.destination,
+      transferMode: payoutRes.mode,
+    },
   });
 
   // Update gig status

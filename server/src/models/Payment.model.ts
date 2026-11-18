@@ -8,15 +8,16 @@ export interface IPayment extends Document {
   freelancer: mongoose.Types.ObjectId;
   amount: number; // in INR
   currency: string;
-  platformCommission: number; // 25% platform fee
-  freelancerEarnings: number; // 75% net amount for freelancer
+  platformCommission: number; // 10% platform fee
+  freelancerEarnings: number; // 90% net amount for freelancer
   paymentGateway: 'razorpay' | 'demo';
   status: 'created' | 'captured' | 'failed' | 'refunded';
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   razorpaySignature?: string;
+  razorpayTransferId?: string;
   failureReason?: string;
-  type: 'escrow_deposit' | 'escrow_release' | 'milestone_payment';
+  type: 'escrow_deposit' | 'escrow_release' | 'milestone_payment' | 'payout_transfer';
   notes?: Record<string, any>;
   createdAt: Date;
   updatedAt: Date;
@@ -43,10 +44,11 @@ const PaymentSchema = new Schema<IPayment>(
     razorpayOrderId: { type: String, index: true },
     razorpayPaymentId: { type: String },
     razorpaySignature: { type: String },
+    razorpayTransferId: { type: String },
     failureReason: { type: String },
     type: {
       type: String,
-      enum: ['escrow_deposit', 'escrow_release', 'milestone_payment'],
+      enum: ['escrow_deposit', 'escrow_release', 'milestone_payment', 'payout_transfer'],
       default: 'escrow_deposit',
     },
     notes: { type: Schema.Types.Mixed },

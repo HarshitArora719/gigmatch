@@ -6,7 +6,7 @@ import path from 'path';
 import https from 'https';
 import Profile from '../models/Profile.model';
 import User from '../models/User.model';
-import { calculateProfileScore } from './user.controller';
+import { calculateProfileScore, invalidateMeCache } from './user.controller';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiResponse } from '../utils/apiResponse';
 import { invalidateUserCache } from '../middleware/auth.middleware';
@@ -59,6 +59,8 @@ export const uploadAvatar = asyncHandler(async (req: any, res: Response) => {
           Profile.findOneAndUpdate({ user: userId }, { avatar: avatarUrl }, { upsert: true })
         ]);
         invalidateUserCache(userId);
+    invalidateMeCache(userId);
+        invalidateMeCache(userId);
         const updatedUser = await User.findById(userId).select('_id name email role avatar avatarColor isVerified createdAt').lean();
         return ApiResponse.success(res, { avatarUrl, user: updatedUser }, 'Avatar uploaded successfully');
       }
@@ -72,6 +74,7 @@ export const uploadAvatar = asyncHandler(async (req: any, res: Response) => {
       Profile.findOneAndUpdate({ user: userId }, { avatar: avatarUrl }, { upsert: true })
     ]);
     invalidateUserCache(userId);
+    invalidateMeCache(userId);
     const updatedUser = await User.findById(userId).select('_id name email role avatar avatarColor isVerified createdAt').lean();
     return ApiResponse.success(res, { avatarUrl, user: updatedUser }, 'Avatar uploaded successfully');
   }

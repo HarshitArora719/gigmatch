@@ -1,8 +1,41 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
+import fs from 'fs';
+import path from 'path';
 import Gig from '../models/Gig.model';
 import Proposal from '../models/Proposal.model';
+import Profile from '../models/Profile.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiResponse } from '../utils/apiResponse';
+
+const saveBase64ToFile = (base64Str: string, folder: string, filePrefix: string): string => {
+  if (!base64Str || typeof base64Str !== 'string' || !base64Str.startsWith('data:')) return base64Str;
+  try {
+    const matches = base64Str.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) return base64Str;
+
+    const mimeType = matches[1];
+    const base64Data = matches[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    let ext = 'bin';
+    if (mimeType.includes('png')) ext = 'png';
+    else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg';
+    else if (mimeType.includes('webp')) ext = 'webp';
+    else if (mimeType.includes('gif')) ext = 'gif';
+    else if (mimeType.includes('pdf')) ext = 'pdf';
+
+    const dir = path.join(__dirname, `../../uploads/${folder}`);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const filename = `${filePrefix}_${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(dir, filename), buffer);
+    return `/uploads/${folder}/${filename}`;
+  } catch (err) {
+    console.error('Failed to save base64 attachment to file:', err);
+    return base64Str;
+  }
+};
 
 // ─── High-Speed In-Memory Cache with TTL ────────────────────────────────────
 interface CacheItem<T = any> {
@@ -44,6 +77,25 @@ export const createGig = asyncHandler(async (req: any, res: Response) => {
     return ApiResponse.error(res, 'Budget must be at least ₹100', 400);
   }
 
+  const sanitizedAttachments = Array.isArray(attachments)
+    ? attachments.map((att: any, idx: number) => {
+        if (att && att.url && typeof att.url === 'string' && att.url.startsWith('data:')) {
+          const fileUrl = saveBase64ToFile(att.url, 'attachments', `att_${req.user.id}_${idx}`);
+          return { ...att, url: fileUrl };
+        }
+        return att;
+      })
+    : [];
+
+  const sanitizedImages = Array.isArray(images)
+    ? images.map((img: string, idx: number) => {
+        if (typeof img === 'string' && img.startsWith('data:')) {
+          return saveBase64ToFile(img, 'gig_images', `gig_img_${req.user.id}_${idx}`);
+        }
+        return img;
+      })
+    : [];
+
   const gig = await Gig.create({
     client: req.user.id,
     title: title.trim(),
@@ -52,8 +104,8 @@ export const createGig = asyncHandler(async (req: any, res: Response) => {
     tags: Array.isArray(tags) ? tags : typeof tags === 'string' ? tags.split(',').map((t: string) => t.trim()).filter(Boolean) : [],
     budget: numericBudget,
     deadline: deadline ? new Date(deadline) : undefined,
-    images: Array.isArray(images) ? images : [],
-    attachments: Array.isArray(attachments) ? attachments : [],
+    images: sanitizedImages,
+    attachments: sanitizedAttachments,
     experienceLevel: experienceLevel || 'intermediate',
     status: 'open',
   });
@@ -146,37 +198,70 @@ export const getAllGigs = asyncHandler(async (req: Request, res: Response) => {
   return ApiResponse.success(res, responsePayload);
 });
 
-export const getGigById = asyncHandler(async (req: Request, res: Response) => {
+export const getGigById = asyncHandler(async (req: any, res: Response) => {
   const gigId = String(req.params.id);
 
-  // Check single gig cache
-  const cached = singleGigCache.get(gigId);
-  if (cached && Date.now() < cached.expiresAt) {
-    return ApiResponse.success(res, cached.data);
-  }
-
-  const [gig, proposalsCount] = await Promise.all([
-    Gig.findById(gigId)
-      .populate('client', 'name avatar avatarColor')
-      .lean(),
-    Proposal.countDocuments({ gig: gigId }),
-  ]);
-
-  if (!gig) {
+  if (!mongoose.Types.ObjectId.isValid(gigId)) {
     return ApiResponse.error(res, 'Gig not found', 404);
   }
 
-  const payload = { gig: { ...gig, proposalsCount } };
-  singleGigCache.set(gigId, {
-    data: payload,
-    expiresAt: Date.now() + SINGLE_GIG_CACHE_TTL_MS,
-  });
+  // Check single gig cache
+  const cached = singleGigCache.get(gigId);
+  let baseGig: any = null;
+  let proposalsCount = 0;
 
-  return ApiResponse.success(res, payload);
+  if (cached && Date.now() < cached.expiresAt) {
+    baseGig = cached.data.gig;
+    proposalsCount = cached.data.proposalsCount;
+  } else {
+    const [gigDoc, count] = await Promise.all([
+      Gig.findById(gigId)
+        .populate('client', 'name avatar avatarColor')
+        .lean(),
+      Proposal.countDocuments({ gig: gigId }),
+    ]);
+
+    if (!gigDoc) {
+      return ApiResponse.error(res, 'Gig not found', 404);
+    }
+
+    baseGig = gigDoc;
+    proposalsCount = count;
+
+    // Fallback: Populate client avatar & avatarColor from Profile if not set on User
+    if (baseGig.client && !baseGig.client.avatar) {
+      const clientId = baseGig.client._id?.toString() || baseGig.client.toString();
+      const profile = await Profile.findOne({ user: clientId }).select('avatar avatarColor').lean();
+      if (profile) {
+        if (profile.avatar) baseGig.client.avatar = profile.avatar;
+        if (profile.avatarColor) baseGig.client.avatarColor = profile.avatarColor;
+      }
+    }
+
+    singleGigCache.set(gigId, {
+      data: { gig: baseGig, proposalsCount },
+      expiresAt: Date.now() + SINGLE_GIG_CACHE_TTL_MS,
+    });
+  }
+
+  // Check if current authenticated user has already submitted a proposal
+  let hasApplied = false;
+  if (req.user?.id) {
+    hasApplied = Boolean(await Proposal.exists({ gig: gigId, freelancer: req.user.id }));
+  }
+
+  return ApiResponse.success(res, {
+    gig: {
+      ...baseGig,
+      proposalsCount,
+      hasApplied,
+    },
+  });
 });
 
 export const getMyGigs = asyncHandler(async (req: any, res: Response) => {
   const gigs = await Gig.find({ client: req.user.id })
+    .select('-attachments')
     .sort({ createdAt: -1 })
     .lean();
 

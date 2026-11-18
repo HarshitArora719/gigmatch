@@ -24,10 +24,20 @@ interface AuthState {
   setAuthModal: (open: boolean, view?: 'login' | 'register') => void;
 }
 
+const getStoredUser = (): User | null => {
+  try {
+    const raw = localStorage.getItem('gm_user');
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+};
+
+const initialUser = getStoredUser();
+
 export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
+  user: initialUser,
   isLoading: false,
-  isInitialized: false,
+  isInitialized: !!initialUser,
   isAuthModalOpen: false,
   authModalView: 'login',
 
@@ -38,28 +48,35 @@ export const useAuthStore = create<AuthState>((set) => ({
     })),
 
   updateUser: (fields) =>
-    set((state) => ({
-      user: state.user ? { ...state.user, ...fields } : null,
-    })),
+    set((state) => {
+      const updated = state.user ? { ...state.user, ...fields } : null;
+      if (updated) {
+        try { localStorage.setItem('gm_user', JSON.stringify(updated)); } catch {}
+      }
+      return { user: updated };
+    }),
 
   fetchMe: async () => {
     try {
       const res = await api.get('/api/users/me');
       const u = res.data.data.user;
+      const userData: User = {
+        id: String(u.id ?? u._id),
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        avatar: u.avatar || '',
+        avatarColor: u.avatarColor || '#22D3EE',
+      };
+      try { localStorage.setItem('gm_user', JSON.stringify(userData)); } catch {}
       set({
-        user: {
-          id: String(u.id ?? u._id),
-          name: u.name,
-          email: u.email,
-          role: u.role,
-          avatar: u.avatar || '',
-          avatarColor: u.avatarColor || '#22D3EE',
-        },
+        user: userData,
         isInitialized: true,
       });
     } catch (err: any) {
       if (err.response?.status === 401) {
         localStorage.removeItem('gm_token');
+        localStorage.removeItem('gm_user');
         set({ user: null, isInitialized: true });
       } else {
         set({ isInitialized: true });
@@ -75,16 +92,19 @@ export const useAuthStore = create<AuthState>((set) => ({
       if (token) {
         localStorage.setItem('gm_token', token);
       }
+      const userData: User = {
+        id: String(user.id ?? user._id),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar || '',
+        avatarColor: user.avatarColor || '#22D3EE',
+      };
+      try { localStorage.setItem('gm_user', JSON.stringify(userData)); } catch {}
       set({
-        user: {
-          id: String(user.id ?? user._id),
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          avatar: user.avatar || '',
-          avatarColor: user.avatarColor || '#22D3EE',
-        },
+        user: userData,
         isLoading: false,
+        isInitialized: true,
       });
     } catch (err) {
       set({ isLoading: false });
@@ -100,16 +120,19 @@ export const useAuthStore = create<AuthState>((set) => ({
       if (token) {
         localStorage.setItem('gm_token', token);
       }
+      const userData: User = {
+        id: String(user.id ?? user._id),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar || '',
+        avatarColor: user.avatarColor || '#22D3EE',
+      };
+      try { localStorage.setItem('gm_user', JSON.stringify(userData)); } catch {}
       set({
-        user: {
-          id: String(user.id ?? user._id),
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          avatar: user.avatar || '',
-          avatarColor: user.avatarColor || '#22D3EE',
-        },
+        user: userData,
         isLoading: false,
+        isInitialized: true,
       });
     } catch (err) {
       set({ isLoading: false });
@@ -124,6 +147,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       // Ignore network errors on logout
     } finally {
       localStorage.removeItem('gm_token');
+      localStorage.removeItem('gm_user');
       set({ user: null });
     }
   }

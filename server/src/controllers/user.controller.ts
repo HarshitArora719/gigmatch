@@ -67,8 +67,24 @@ export const calculateProfileScore = (user: any, profile: any): number => {
   return Math.min(100, Math.max(score, 15));
 };
 
+interface MeCacheItem {
+  data: any;
+  expiresAt: number;
+}
+const meCache = new Map<string, MeCacheItem>();
+
+export const invalidateMeCache = (userId?: string) => {
+  if (userId) meCache.delete(String(userId));
+  else meCache.clear();
+};
+
 export const getMe = asyncHandler(async (req: any, res: Response) => {
-  console.time('user:getMe');
+  const userId = String(req.user.id);
+  const cached = meCache.get(userId);
+  if (cached && Date.now() < cached.expiresAt) {
+    return ApiResponse.success(res, cached.data);
+  }
+
   const [user, profileDoc] = await Promise.all([
     User.findById(req.user.id).select('_id name email role avatar avatarColor isVerified createdAt').lean(),
     Profile.findOne({ user: req.user.id })
@@ -107,9 +123,7 @@ export const getMe = asyncHandler(async (req: any, res: Response) => {
 
   const completionScore = calculateProfileScore(user, profile);
 
-  console.timeEnd('user:getMe');
-
-  return ApiResponse.success(res, {
+  const responsePayload = {
     user: {
       id: user._id,
       name: user.name,
@@ -153,7 +167,10 @@ export const getMe = asyncHandler(async (req: any, res: Response) => {
       },
       profileCompletionPercentage: completionScore,
     },
-  });
+  };
+
+  meCache.set(userId, { data: responsePayload, expiresAt: Date.now() + 20000 });
+  return ApiResponse.success(res, responsePayload);
 });
 
 export const createOrUpdateProfile = asyncHandler(async (req: any, res: Response) => {
@@ -182,6 +199,7 @@ export const createOrUpdateProfile = asyncHandler(async (req: any, res: Response
     availabilityStatus,
     preferredWorkTypes,
     certifications,
+    payoutDetails,
   } = req.body;
 
   // Update user model if name, avatar, or avatarColor changed
@@ -226,6 +244,12 @@ export const createOrUpdateProfile = asyncHandler(async (req: any, res: Response
     if (availabilityStatus !== undefined) profile.availabilityStatus = availabilityStatus;
     if (preferredWorkTypes !== undefined) profile.preferredWorkTypes = Array.isArray(preferredWorkTypes) ? preferredWorkTypes : [];
     if (certifications !== undefined) profile.certifications = Array.isArray(certifications) ? certifications : [];
+    if (payoutDetails !== undefined) {
+      profile.payoutDetails = {
+        ...profile.payoutDetails,
+        ...payoutDetails,
+      };
+    }
 
     const userObj = await User.findById(req.user.id);
     const score = calculateProfileScore(userObj, profile);
@@ -258,6 +282,7 @@ export const createOrUpdateProfile = asyncHandler(async (req: any, res: Response
       availabilityStatus: availabilityStatus || 'Available Now',
       preferredWorkTypes: Array.isArray(preferredWorkTypes) ? preferredWorkTypes : [],
       certifications: Array.isArray(certifications) ? certifications : [],
+      payoutDetails: payoutDetails || { payoutMethod: 'upi' },
     });
     const score = calculateProfileScore(userObj, profile);
     profile.profileCompletion = score;
@@ -265,6 +290,7 @@ export const createOrUpdateProfile = asyncHandler(async (req: any, res: Response
     await profile.save();
   }
 
+  invalidateMeCache(req.user.id);
   invalidateUserCache(req.user.id);
   const updatedUser = await User.findById(req.user.id).select('_id name email role avatar avatarColor isVerified createdAt').lean();
 

@@ -24,6 +24,17 @@ export interface ICertification {
   credentialUrl?: string;
 }
 
+export interface IPayoutDetails {
+  payoutMethod?: 'upi' | 'bank_transfer';
+  upiId?: string;
+  accountHolderName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  bankName?: string;
+  razorpayAccountId?: string;
+  isVerified?: boolean;
+}
+
 export interface IProfile extends Document {
   user: mongoose.Types.ObjectId;
   bio?: string;
@@ -40,6 +51,7 @@ export interface IProfile extends Document {
   hourlyRate?: number;
   experience: number; // in years
   portfolio: IPortfolioItem[];
+  payoutDetails?: IPayoutDetails;
   // Freelancer-specific fields
   githubUrl?: string;
   linkedinUrl?: string;
@@ -113,6 +125,16 @@ const ProfileSchema = new Schema<IProfile>({
     issueDate: { type: String, trim: true },
     credentialUrl: { type: String, trim: true },
   }],
+  payoutDetails: {
+    payoutMethod: { type: String, enum: ['upi', 'bank_transfer'], default: 'upi' },
+    upiId: { type: String, trim: true },
+    accountHolderName: { type: String, trim: true },
+    accountNumber: { type: String, trim: true },
+    ifscCode: { type: String, trim: true },
+    bankName: { type: String, trim: true },
+    razorpayAccountId: { type: String, trim: true },
+    isVerified: { type: Boolean, default: false },
+  },
   verificationStatus: {
     emailVerified: { type: Boolean, default: true },
     phoneVerified: { type: Boolean, default: false },

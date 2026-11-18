@@ -59,7 +59,7 @@ export default function GigProposals() {
       if (data.mode === 'razorpay') {
         // Razorpay Gateway Flow (Live / Test mode)
         await openRazorpayModal({
-          key: data.keyId,
+          key: data.keyId || import.meta.env.VITE_RAZORPAY_KEY_ID || '',
           amount: data.amount,
           currency: data.currency || 'INR',
           name: 'GigMatch Escrow',

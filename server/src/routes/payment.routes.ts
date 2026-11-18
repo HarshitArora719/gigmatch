@@ -9,6 +9,7 @@ import {
   createMilestonePaymentOrder,
   verifyMilestonePaymentSignature,
   processMilestoneDemoPayment,
+  approveAndReleaseMilestone,
 } from '../controllers/payment.controller';
 import { protect } from '../middleware/auth.middleware';
 
@@ -23,7 +24,8 @@ router.post('/verify-signature', protect, verifyPaymentSignature);
 router.post('/demo-payment', protect, processDemoPayment);
 router.post('/record-failure', protect, recordPaymentFailure);
 
-// Milestone Payment & Release flows (Razorpay + Demo fallback)
+// Milestone Payment & Release flows (Option A Escrow + Automated Route / Payouts)
+router.post('/milestone/approve-and-release', protect, approveAndReleaseMilestone);
 router.post('/milestone/create-order', protect, createMilestonePaymentOrder);
 router.post('/milestone/verify-signature', protect, verifyMilestonePaymentSignature);
 router.post('/milestone/demo-payment', protect, processMilestoneDemoPayment);

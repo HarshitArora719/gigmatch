@@ -9,9 +9,11 @@ const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 const AVATARS_DIR = path.join(UPLOADS_DIR, 'avatars');
 const PORTFOLIO_DIR = path.join(UPLOADS_DIR, 'portfolio');
 const RESUMES_DIR = path.join(UPLOADS_DIR, 'resumes');
+const ATTACHMENTS_DIR = path.join(UPLOADS_DIR, 'attachments');
+const GIG_IMAGES_DIR = path.join(UPLOADS_DIR, 'gig_images');
 
 // Ensure directories exist
-[UPLOADS_DIR, AVATARS_DIR, PORTFOLIO_DIR, RESUMES_DIR].forEach((dir) => {
+[UPLOADS_DIR, AVATARS_DIR, PORTFOLIO_DIR, RESUMES_DIR, ATTACHMENTS_DIR, GIG_IMAGES_DIR].forEach((dir) => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -114,6 +116,90 @@ async function migrate() {
         { $set: updates }
       );
       console.log(`Updated profile ${p._id} with lightweight file paths.`);
+    }
+  }
+
+  // 3. Sanitize Gigs
+  const gigs = await db.collection('gigs').find({}).toArray();
+  console.log(`Auditing ${gigs.length} gigs...`);
+
+  for (const g of gigs) {
+    let modified = false;
+    const updates: any = {};
+
+    if (Array.isArray(g.attachments)) {
+      const updatedAttachments = g.attachments.map((att: any, idx: number) => {
+        if (att.url && (att.url.startsWith('data:') || att.url.length > 500)) {
+          console.log(`Found heavy attachment in gig "${g.title}" (${(att.url.length / 1024).toFixed(1)} KB). Converting to file...`);
+          const fileUrl = saveBase64ToFile(att.url, ATTACHMENTS_DIR, `attachment_${g._id}_${idx}`);
+          modified = true;
+          return { ...att, url: fileUrl || '' };
+        }
+        return att;
+      });
+      if (modified) {
+        updates.attachments = updatedAttachments;
+      }
+    }
+
+    if (Array.isArray(g.images)) {
+      let imagesModified = false;
+      const updatedImages = g.images.map((img: string, idx: number) => {
+        if (typeof img === 'string' && (img.startsWith('data:') || img.length > 500)) {
+          console.log(`Found heavy image in gig "${g.title}" (${(img.length / 1024).toFixed(1)} KB). Converting to file...`);
+          const fileUrl = saveBase64ToFile(img, GIG_IMAGES_DIR, `gig_img_${g._id}_${idx}`);
+          imagesModified = true;
+          return fileUrl || '';
+        }
+        return img;
+      });
+      if (imagesModified) {
+        updates.images = updatedImages;
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      await db.collection('gigs').updateOne(
+        { _id: g._id },
+        { $set: updates }
+      );
+      console.log(`Updated gig "${g.title}" (${g._id}) with lightweight file paths.`);
+    }
+  }
+
+  // 4. Sanitize Orders deliverables
+  const orders = await db.collection('orders').find({}).toArray();
+  console.log(`Auditing ${orders.length} orders...`);
+  for (const o of orders) {
+    let modified = false;
+    if (Array.isArray(o.deliverables)) {
+      const updatedDeliverables = o.deliverables.map((deliv: any, dIdx: number) => {
+        if (Array.isArray(deliv.attachments)) {
+          let attsModified = false;
+          const updatedAtts = deliv.attachments.map((att: string, aIdx: number) => {
+            if (typeof att === 'string' && (att.startsWith('data:') || att.length > 500)) {
+              console.log(`Found heavy deliverable attachment in order ${o._id} (${(att.length / 1024).toFixed(1)} KB).`);
+              const fileUrl = saveBase64ToFile(att, ATTACHMENTS_DIR, `deliv_${o._id}_${dIdx}_${aIdx}`);
+              attsModified = true;
+              return fileUrl || '';
+            }
+            return att;
+          });
+          if (attsModified) {
+            modified = true;
+            return { ...deliv, attachments: updatedAtts };
+          }
+        }
+        return deliv;
+      });
+      if (modified) {
+        await db.collection('orders').updateOne(
+          { _id: o._id },
+          { $set: { deliverables: updatedDeliverables } }
+        );
+        console.log(`Updated order ${o._id} deliverables.`);
+      }
     }
   }
 

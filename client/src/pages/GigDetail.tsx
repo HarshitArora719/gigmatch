@@ -26,6 +26,17 @@ import {
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/skeleton';
 
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000').replace(/\/$/, '');
+
+const getFileUrl = (url?: string) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+  const cleanPath = url.startsWith('/') ? url : `/${url}`;
+  return `${API_BASE}${cleanPath}`;
+};
+
 export default function GigDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -63,7 +74,7 @@ export default function GigDetail() {
 
   useEffect(() => {
     fetchGig();
-  }, [id]);
+  }, [id, user?.id]);
 
   const fetchGig = async () => {
     try {
@@ -83,9 +94,18 @@ export default function GigDetail() {
 
       // Fetch similar gigs in the same category
       try {
-        const simRes = await api.get(`/api/gigs?limit=4`);
-        const allGigs = simRes.data.data?.gigs || [];
-        setSimilarGigs(allGigs.filter((g: any) => g._id !== id).slice(0, 3));
+        const catQuery = gigData?.category ? `&category=${encodeURIComponent(gigData.category)}` : '';
+        let simRes = await api.get(`/api/gigs?status=open&limit=6${catQuery}`);
+        let allGigs = simRes.data.data?.gigs || [];
+        let filtered = allGigs.filter((g: any) => g._id !== id);
+
+        // If no gigs found in same category, fallback to open gigs
+        if (filtered.length === 0 && gigData?.category) {
+          const fallbackRes = await api.get(`/api/gigs?status=open&limit=6`);
+          const fallbackGigs = fallbackRes.data.data?.gigs || [];
+          filtered = fallbackGigs.filter((g: any) => g._id !== id);
+        }
+        setSimilarGigs(filtered.slice(0, 3));
       } catch (err) {
         console.error('Failed to fetch similar gigs', err);
       }
@@ -109,10 +129,14 @@ export default function GigDetail() {
         proposedPrice: Number(proposal.proposedPrice),
         estimatedDays: Number(proposal.estimatedDays),
       });
-      setGig((prev: any) => (prev ? { ...prev, proposalsCount: (prev.proposalsCount || 0) + 1 } : prev));
+      setGig((prev: any) => (prev ? {
+        ...prev,
+        hasApplied: true,
+        proposalsCount: (prev.proposalsCount || 0) + 1
+      } : prev));
       toast.success('Proposal submitted successfully!');
       setShowProposal(false);
-      navigate('/my-proposals');
+      navigate('/dashboard?tab=Proposals');
     } catch (e: any) {
       toast.error(e.response?.data?.message || 'Failed to submit proposal');
     } finally {
@@ -144,8 +168,13 @@ export default function GigDetail() {
       setAuthModal(true, 'login');
       return;
     }
+    const clientId = gig.client?._id || gig.client?.id || (typeof gig.client === 'string' ? gig.client : '');
+    const currentUserId = user?.id || (user as any)?._id || '';
+    if (currentUserId && clientId && String(currentUserId) === String(clientId)) {
+      toast.info('This is your own gig brief.');
+      return;
+    }
     // Navigate to dashboard Messages tab with hirer info
-    const clientId = gig.client?._id || '';
     const clientNameParam = gig.client?.name || '';
     const clientAvatar = gig.client?.avatar || '';
     const clientAvatarColor = gig.client?.avatarColor || '';
@@ -187,8 +216,22 @@ export default function GigDetail() {
       setAuthModal(true, 'login');
       return;
     }
+    const clientId = gig.client?._id || gig.client?.id || (typeof gig.client === 'string' ? gig.client : '');
+    const currentUserId = user?.id || (user as any)?._id || '';
+    if (currentUserId && clientId && String(currentUserId) === String(clientId)) {
+      toast.info('You are the employer who posted this gig.');
+      return;
+    }
     if (user.role === 'client') {
       toast.info('You are currently logged in as an Employer.');
+      return;
+    }
+    if ((gig.status || 'open') !== 'open') {
+      toast.error('This gig is no longer accepting proposals.');
+      return;
+    }
+    if (gig.hasApplied) {
+      toast.info('You have already submitted a proposal for this gig.');
       return;
     }
     setShowProposal(true);
@@ -234,6 +277,12 @@ export default function GigDetail() {
     );
   }
 
+  const clientId = gig.client?._id || gig.client?.id || (typeof gig.client === 'string' ? gig.client : '');
+  const currentUserId = user?.id || (user as any)?._id || '';
+  const isOwner = Boolean(currentUserId && clientId && String(currentUserId) === String(clientId));
+  const isGigOpen = (gig.status || 'open') === 'open';
+  const hasApplied = Boolean(gig.hasApplied);
+
   const clientName = gig.client?.name || 'Verified Studio';
   const clientInitials = clientName
     .split(' ')
@@ -248,9 +297,12 @@ export default function GigDetail() {
   const formattedDate = gig.createdAt
     ? new Date(gig.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     : 'Recently';
+  const deadlineDisplay = gig.deadline
+    ? new Date(gig.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : 'Flexible';
 
   const bidPriceNumber = Number(proposal.proposedPrice) || 0;
-  const platformFee = Math.round(bidPriceNumber * 0.05);
+  const platformFee = Math.round(bidPriceNumber * 0.10);
   const netEarnings = Math.max(0, bidPriceNumber - platformFee);
 
   // Normalize attachments list from gig.attachments AND gig.images (both are combined)
@@ -258,11 +310,11 @@ export default function GigDetail() {
   if (gig.attachments && Array.isArray(gig.attachments)) {
     gig.attachments.forEach((att: any, i: number) => {
       if (typeof att === 'string') {
-        rawAttachments.push({ name: `Attachment ${i + 1}`, url: att });
+        rawAttachments.push({ name: `Attachment ${i + 1}`, url: getFileUrl(att) });
       } else if (att?.url) {
         rawAttachments.push({
           name: att.name || `Attachment ${i + 1}`,
-          url: att.url,
+          url: getFileUrl(att.url),
           size: att.size,
           type: att.type,
         });
@@ -271,10 +323,11 @@ export default function GigDetail() {
   }
   if (gig.images && Array.isArray(gig.images)) {
     gig.images.forEach((img: string, i: number) => {
+      const fullUrl = getFileUrl(img);
       // Avoid duplicating if already present in attachments
-      const alreadyIncluded = rawAttachments.some(a => a.url === img);
+      const alreadyIncluded = rawAttachments.some(a => a.url === fullUrl || a.url === img);
       if (!alreadyIncluded) {
-        rawAttachments.push({ name: `Project Asset ${i + 1}`, url: img, type: 'image/jpeg' });
+        rawAttachments.push({ name: `Project Asset ${i + 1}`, url: fullUrl, type: 'image/jpeg' });
       }
     });
   }
@@ -349,10 +402,24 @@ export default function GigDetail() {
                   <span className="text-xs font-bold text-purple bg-purple/10 px-3.5 py-1.5 rounded-full capitalize">
                     {categoryLabel}
                   </span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200/50 flex items-center gap-1.5">
-                    <ShieldCheck size={14} className="text-emerald-600" />
-                    <span>Verified Brief</span>
-                  </span>
+                  {gig.status === 'completed' && (
+                    <span className="text-xs font-bold text-zinc-700 bg-zinc-100 px-3 py-1.5 rounded-full border border-zinc-200 flex items-center gap-1.5">
+                      <CheckCircle2 size={14} className="text-zinc-600" />
+                      <span>Contract Completed</span>
+                    </span>
+                  )}
+                  {gig.status === 'in-progress' && (
+                    <span className="text-xs font-bold text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200 flex items-center gap-1.5">
+                      <Clock size={14} className="text-amber-600" />
+                      <span>In Progress</span>
+                    </span>
+                  )}
+                  {(!gig.status || gig.status === 'open') && (
+                    <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200/50 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span>Open for Proposals</span>
+                    </span>
+                  )}
                   <span className="text-xs font-semibold text-ink/50 bg-soft px-3 py-1.5 rounded-full flex items-center gap-1">
                     <MapPin size={13} />
                     <span>Remote / Worldwide</span>
@@ -402,13 +469,34 @@ export default function GigDetail() {
 
               {/* Action Buttons for Mobile/Tablet quick apply */}
               <div className="flex flex-wrap items-center gap-3 pt-2 lg:hidden">
-                <button
-                  onClick={handleApplyClick}
-                  className="btn-primary !py-2.5 !px-6 !text-sm flex-1 justify-center"
-                >
-                  <Send size={15} />
-                  <span>Apply for this Gig</span>
-                </button>
+                {isOwner ? (
+                  <button
+                    onClick={() => navigate(`/my-gigs/${gig._id}/proposals`)}
+                    className="btn-primary !py-2.5 !px-6 !text-sm flex-1 justify-center"
+                  >
+                    <span>Review Proposals ({gig.proposalsCount || 0})</span>
+                  </button>
+                ) : hasApplied ? (
+                  <button
+                    onClick={() => navigate('/dashboard?tab=Proposals')}
+                    className="btn-secondary !py-2.5 !px-6 !text-sm flex-1 justify-center text-emerald-700 border-emerald-300 bg-emerald-50"
+                  >
+                    <CheckCircle2 size={15} />
+                    <span>Proposal Submitted</span>
+                  </button>
+                ) : !isGigOpen ? (
+                  <div className="text-xs font-bold text-ink/60 bg-soft py-2.5 px-4 rounded-xl flex-1 text-center border border-border">
+                    {gig.status === 'completed' ? 'Contract Completed' : 'Submissions Closed'}
+                  </div>
+                ) : (
+                  <button
+                    onClick={handleApplyClick}
+                    className="btn-primary !py-2.5 !px-6 !text-sm flex-1 justify-center"
+                  >
+                    <Send size={15} />
+                    <span>{user ? 'Apply for this Gig' : 'Login to Apply'}</span>
+                  </button>
+                )}
                 <button
                   onClick={handleToggleSave}
                   className="btn-secondary !py-2.5 !px-4 !text-sm"
@@ -637,7 +725,7 @@ export default function GigDetail() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {gig.client?._id && (
+                  {gig.client?._id && !isOwner && (
                     <button
                       onClick={() => navigate(`/profile/${gig.client._id}`)}
                       className="btn-secondary !py-2.5 !px-4 !text-xs"
@@ -645,13 +733,22 @@ export default function GigDetail() {
                       <span>View Profile</span>
                     </button>
                   )}
-                  <button
-                    onClick={handleMessageClient}
-                    className="btn-primary !py-2.5 !px-4 !text-xs"
-                  >
-                    <MessageSquare size={14} />
-                    <span>Message Client</span>
-                  </button>
+                  {isOwner ? (
+                    <button
+                      onClick={() => navigate(`/my-gigs/${gig._id}/proposals`)}
+                      className="btn-primary !py-2.5 !px-4 !text-xs"
+                    >
+                      <span>Review Proposals ({gig.proposalsCount || 0})</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleMessageClient}
+                      className="btn-primary !py-2.5 !px-4 !text-xs"
+                    >
+                      <MessageSquare size={14} />
+                      <span>Message Client</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -749,7 +846,7 @@ export default function GigDetail() {
                       {bidPriceNumber > 0 && (
                         <div className="p-3 rounded-xl bg-purple/5 border border-purple/15 text-xs space-y-1 text-ink/70">
                           <div className="flex justify-between">
-                            <span>Platform fee (5%):</span>
+                            <span>Platform fee (10%):</span>
                             <span className="font-semibold text-coral">-₹{platformFee.toLocaleString('en-IN')}</span>
                           </div>
                           <div className="flex justify-between font-bold text-ink border-t border-purple/10 pt-1">
@@ -857,8 +954,14 @@ export default function GigDetail() {
                             ₹{Number(simGig.budget || 0).toLocaleString('en-IN')}
                           </span>
                         </div>
-                        <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
-                          Open
+                        <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${
+                          simGig.status === 'completed'
+                            ? 'text-zinc-600 bg-zinc-100'
+                            : simGig.status === 'in-progress'
+                            ? 'text-amber-700 bg-amber-50'
+                            : 'text-emerald-700 bg-emerald-50'
+                        }`}>
+                          {simGig.status === 'completed' ? 'Completed' : simGig.status === 'in-progress' ? 'In Progress' : 'Open'}
                         </span>
                       </div>
                     </div>
@@ -879,14 +982,24 @@ export default function GigDetail() {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="eyebrow text-ink/45">FIXED CLIENT BUDGET</span>
-                  <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200/50">
-                    Escrow Ready
-                  </span>
+                  {gig.status === 'completed' ? (
+                    <span className="text-xs font-bold text-zinc-700 bg-zinc-100 px-2.5 py-0.5 rounded-full border border-zinc-200">
+                      Completed
+                    </span>
+                  ) : gig.status === 'in-progress' ? (
+                    <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
+                      In Progress
+                    </span>
+                  ) : (
+                    <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200/50">
+                      Escrow Ready
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-baseline gap-1 mt-1">
                   <span className="font-display text-4xl sm:text-5xl font-extrabold text-ink tracking-tight">
-                    ₹{gig.budget?.toLocaleString('en-IN')}
+                    ₹{Number(gig.budget || 0).toLocaleString('en-IN')}
                   </span>
                 </div>
 
@@ -916,7 +1029,7 @@ export default function GigDetail() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-ink/50">Target Turnaround:</span>
-                  <strong className="text-ink font-semibold">1–2 Weeks</strong>
+                  <strong className="text-ink font-semibold">{deadlineDisplay}</strong>
                 </div>
               </div>
 
@@ -924,7 +1037,65 @@ export default function GigDetail() {
 
               {/* Action Buttons */}
               <div className="space-y-2.5">
-                {user?.role === 'freelancer' && (
+                {isOwner ? (
+                  <div className="bg-purple/5 border border-purple/20 p-4 rounded-2xl text-center space-y-2.5">
+                    <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-purple">
+                      <Sparkles size={15} />
+                      <span>You posted this gig</span>
+                    </div>
+                    <p className="text-[11px] text-ink/60 leading-relaxed">
+                      Review submitted proposals, evaluate creators, and fund milestones.
+                    </p>
+                    <button
+                      onClick={() => navigate(`/my-gigs/${gig._id}/proposals`)}
+                      className="w-full btn-primary !py-3 !text-xs justify-center shadow-md shadow-purple/15"
+                    >
+                      <span>Review Proposals ({gig.proposalsCount || 0})</span>
+                    </button>
+                    <Link
+                      to="/dashboard?tab=Projects"
+                      className="block text-center text-xs font-bold text-purple hover:underline pt-1"
+                    >
+                      Manage in Dashboard →
+                    </Link>
+                  </div>
+                ) : !isGigOpen ? (
+                  <div className="bg-soft p-4 rounded-2xl text-center border border-border/70 space-y-1.5">
+                    <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-ink/70">
+                      <AlertCircle size={15} className="text-ink/40" />
+                      <span>
+                        {gig.status === 'completed' ? 'Contract Completed' : 'Submissions Closed'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-ink/50">
+                      {gig.status === 'completed'
+                        ? 'This project has been completed and is no longer accepting proposals.'
+                        : 'A creator has been selected for this project.'}
+                    </p>
+                    <Link
+                      to="/gigs"
+                      className="inline-block mt-2 text-xs font-bold text-purple hover:underline"
+                    >
+                      Browse Other Gigs →
+                    </Link>
+                  </div>
+                ) : hasApplied ? (
+                  <div className="bg-emerald-50/80 border border-emerald-200 p-4 rounded-2xl text-center space-y-2">
+                    <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-emerald-800">
+                      <CheckCircle2 size={16} className="text-emerald-600" />
+                      <span>Proposal Submitted</span>
+                    </div>
+                    <p className="text-[11px] text-emerald-700/80">
+                      You have already submitted a proposal for this gig.
+                    </p>
+                    <button
+                      onClick={() => navigate('/dashboard?tab=Proposals')}
+                      className="w-full btn-secondary !py-2.5 !text-xs justify-center"
+                    >
+                      <span>View My Proposals</span>
+                    </button>
+                  </div>
+                ) : user?.role === 'freelancer' ? (
                   <button
                     onClick={handleApplyClick}
                     className="w-full btn-primary !py-3.5 !text-sm justify-center shadow-lg shadow-purple/20"
@@ -932,9 +1103,7 @@ export default function GigDetail() {
                     <Send size={16} />
                     <span>Apply for this Gig</span>
                   </button>
-                )}
-
-                {!user && (
+                ) : !user ? (
                   <button
                     onClick={() => setAuthModal(true, 'login')}
                     className="w-full btn-primary !py-3.5 !text-sm justify-center shadow-lg shadow-purple/20"
@@ -942,9 +1111,7 @@ export default function GigDetail() {
                     <Send size={16} />
                     <span>Login to Apply</span>
                   </button>
-                )}
-
-                {user?.role === 'client' && (
+                ) : (
                   <div className="bg-soft p-3.5 rounded-2xl text-center border border-border/60">
                     <p className="text-xs font-semibold text-ink/60">
                       You are currently logged in as an Employer.
@@ -1014,17 +1181,38 @@ export default function GigDetail() {
             Fixed Budget
           </span>
           <span className="font-display font-extrabold text-xl text-ink">
-            ₹{gig.budget?.toLocaleString('en-IN')}
+            ₹{Number(gig.budget || 0).toLocaleString('en-IN')}
           </span>
         </div>
 
-        <button
-          onClick={handleApplyClick}
-          className="btn-primary !py-2.5 !px-6 !text-xs shrink-0"
-        >
-          <Send size={14} />
-          <span>Apply Now</span>
-        </button>
+        {isOwner ? (
+          <button
+            onClick={() => navigate(`/my-gigs/${gig._id}/proposals`)}
+            className="btn-primary !py-2.5 !px-5 !text-xs shrink-0"
+          >
+            <span>Review Proposals ({gig.proposalsCount || 0})</span>
+          </button>
+        ) : hasApplied ? (
+          <button
+            onClick={() => navigate('/dashboard?tab=Proposals')}
+            className="btn-secondary !py-2.5 !px-5 !text-xs shrink-0 text-emerald-700 border-emerald-300 bg-emerald-50"
+          >
+            <CheckCircle2 size={14} />
+            <span>Applied</span>
+          </button>
+        ) : !isGigOpen ? (
+          <span className="text-xs font-bold text-ink/50 bg-soft py-2 px-3 rounded-lg border border-border">
+            {gig.status === 'completed' ? 'Completed' : 'Closed'}
+          </span>
+        ) : (
+          <button
+            onClick={handleApplyClick}
+            className="btn-primary !py-2.5 !px-6 !text-xs shrink-0"
+          >
+            <Send size={14} />
+            <span>{user ? 'Apply Now' : 'Login to Apply'}</span>
+          </button>
+        )}
       </div>
 
     </div>

@@ -7,6 +7,7 @@ import Notification from '../models/Notification.model';
 import Conversation from '../models/Conversation.model';
 import Payment from '../models/Payment.model';
 import User from '../models/User.model';
+import Profile from '../models/Profile.model';
 import { getIO } from '../config/socket';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiResponse } from '../utils/apiResponse';
@@ -15,6 +16,7 @@ import {
   createEscrow,
   verifyRazorpaySignature,
   PLATFORM_COMMISSION_RATE,
+  transferMilestonePayout,
 } from '../services/escrow.service';
 import { invalidateGigsCache } from './gig.controller';
 
@@ -439,6 +441,11 @@ export const verifyPayment = asyncHandler(async (req: any, res: Response) => {
   // Update milestone
   order.milestones[idx].status = 'approved';
   order.milestones[idx].paidAt = new Date();
+
+  // Advance next milestone to 'in_progress' if pending
+  if (idx + 1 < order.milestones.length && order.milestones[idx + 1].status === 'pending') {
+    order.milestones[idx + 1].status = 'in_progress';
+  }
   await order.save();
 
   // Check if all milestones are approved
@@ -460,7 +467,7 @@ export const verifyPayment = asyncHandler(async (req: any, res: Response) => {
       user: req.user.id,
       type: 'order_completed',
       title: 'Order Completed & Escrow Released',
-      description: `All milestones approved. Contract marked complete. 25% platform fee (₹${(order.platformCommission || 0).toLocaleString('en-IN')}) retained; freelancer received ₹${(order.freelancerEarnings || 0).toLocaleString('en-IN')}.`,
+      description: `All milestones approved. Contract marked complete. 10% platform fee (₹${(order.platformCommission || 0).toLocaleString('en-IN')}) retained; freelancer received ₹${(order.freelancerEarnings || 0).toLocaleString('en-IN')}.`,
     });
   } else {
     await Activity.create({
@@ -640,6 +647,11 @@ export const verifyMilestonePaymentSignature = asyncHandler(async (req: any, res
   order.milestones[idx].status = 'approved';
   order.milestones[idx].paidAt = new Date();
 
+  // Advance next milestone to 'in_progress' if pending
+  if (idx + 1 < order.milestones.length && order.milestones[idx + 1].status === 'pending') {
+    order.milestones[idx + 1].status = 'in_progress';
+  }
+
   // Approve deliverables
   if (order.deliverables && order.deliverables.length > 0) {
     order.deliverables.forEach((d: any) => {
@@ -668,7 +680,7 @@ export const verifyMilestonePaymentSignature = asyncHandler(async (req: any, res
     user: req.user.id,
     type: allApproved ? 'order_completed' : 'milestone_approved',
     title: allApproved ? 'Contract Completed & Final Payment Released' : `Milestone ${idx + 1} Approved & Released`,
-    description: `Client approved "${milestone.title}" and released ₹${milestoneAmount.toLocaleString('en-IN')} via Razorpay (Freelancer net: ₹${freelancerEarnings.toLocaleString('en-IN')}, 25% fee: ₹${platformCommission.toLocaleString('en-IN')}).`,
+    description: `Client approved "${milestone.title}" and released ₹${milestoneAmount.toLocaleString('en-IN')} via Razorpay (Freelancer net: ₹${freelancerEarnings.toLocaleString('en-IN')}, 10% fee: ₹${platformCommission.toLocaleString('en-IN')}).`,
   });
 
   // Notify freelancer
@@ -761,6 +773,11 @@ export const processMilestoneDemoPayment = asyncHandler(async (req: any, res: Re
   order.milestones[idx].status = 'approved';
   order.milestones[idx].paidAt = new Date();
 
+  // Advance next milestone to 'in_progress' if pending
+  if (idx + 1 < order.milestones.length && order.milestones[idx + 1].status === 'pending') {
+    order.milestones[idx + 1].status = 'in_progress';
+  }
+
   // Approve deliverables
   if (order.deliverables && order.deliverables.length > 0) {
     order.deliverables.forEach((d: any) => {
@@ -789,7 +806,7 @@ export const processMilestoneDemoPayment = asyncHandler(async (req: any, res: Re
     user: req.user.id,
     type: allApproved ? 'order_completed' : 'milestone_approved',
     title: allApproved ? 'Contract Completed & Final Payment Released (Demo)' : `Milestone ${idx + 1} Approved & Released (Demo)`,
-    description: `Client approved "${milestone.title}" and released ₹${milestoneAmount.toLocaleString('en-IN')} via Demo Payment (Freelancer: ₹${freelancerEarnings.toLocaleString('en-IN')}, 25% fee: ₹${platformCommission.toLocaleString('en-IN')}).`,
+    description: `Client approved "${milestone.title}" and released ₹${milestoneAmount.toLocaleString('en-IN')} via Demo Payment (Freelancer: ₹${freelancerEarnings.toLocaleString('en-IN')}, 10% fee: ₹${platformCommission.toLocaleString('en-IN')}).`,
   });
 
   // Notify freelancer
@@ -825,4 +842,157 @@ export const processMilestoneDemoPayment = asyncHandler(async (req: any, res: Re
   }
 
   return ApiResponse.success(res, { order, isCompleted: allApproved, approvedMilestoneIndex: idx }, 'Milestone demo payment released');
+});
+
+// ─── 10. Approve Milestone & Release Escrow Payout (Automated Razorpay Payout) ──
+export const approveAndReleaseMilestone = asyncHandler(async (req: any, res: Response) => {
+  const { orderId, milestoneIndex } = req.body;
+
+  if (!orderId || milestoneIndex === undefined) {
+    return ApiResponse.error(res, 'orderId and milestoneIndex are required', 400);
+  }
+
+  const order = await Order.findById(orderId).populate('gig', 'title');
+  if (!order) {
+    return ApiResponse.error(res, 'Order not found', 404);
+  }
+
+  // Security: Only the client who placed the order can approve milestone payout releases
+  if (order.client.toString() !== req.user.id) {
+    return ApiResponse.error(res, 'Only the client can approve milestone releases', 403);
+  }
+
+  const idx = parseInt(milestoneIndex);
+  if (isNaN(idx) || !order.milestones[idx]) {
+    return ApiResponse.error(res, 'Invalid milestone index', 400);
+  }
+
+  const milestone = order.milestones[idx];
+  if (milestone.status === 'approved') {
+    return ApiResponse.error(res, 'This milestone has already been approved and released', 400);
+  }
+
+  // Fetch freelancer's profile to get automated payout destination details
+  const freelancerProfile = await Profile.findOne({ user: order.freelancer });
+  const payoutDetails = freelancerProfile?.payoutDetails;
+
+  const milestoneAmount = milestone.amount;
+  const platformCommission = Math.round(milestoneAmount * PLATFORM_COMMISSION_RATE);
+  const freelancerEarnings = milestoneAmount - platformCommission;
+
+  // Execute payout transfer via Escrow service (Razorpay Route / Automated Payouts / Simulated)
+  const payoutRes = await transferMilestonePayout({
+    orderId: order._id.toString(),
+    milestoneIndex: idx,
+    amount: milestoneAmount,
+    freelancerId: order.freelancer.toString(),
+    payoutDetails,
+    escrowPaymentId: order.razorpayPaymentId,
+  });
+
+  // Record Payment transfer in MongoDB
+  await Payment.create({
+    order: order._id,
+    gig: order.gig,
+    client: req.user.id,
+    freelancer: order.freelancer,
+    amount: milestoneAmount,
+    currency: 'INR',
+    platformCommission,
+    freelancerEarnings,
+    paymentGateway: order.paymentMethod === 'razorpay' ? 'razorpay' : 'demo',
+    status: 'captured',
+    type: 'payout_transfer',
+    razorpayTransferId: payoutRes.transferId,
+    notes: {
+      milestoneIndex: idx,
+      milestoneTitle: milestone.title,
+      destination: payoutRes.destination,
+      transferMode: payoutRes.mode,
+    },
+  });
+
+  // Update milestone status
+  order.milestones[idx].status = 'approved';
+  order.milestones[idx].paidAt = new Date();
+
+  // Advance next milestone to 'in_progress' if pending
+  if (idx + 1 < order.milestones.length && order.milestones[idx + 1].status === 'pending') {
+    order.milestones[idx + 1].status = 'in_progress';
+  }
+
+  // Approve deliverables associated with this milestone
+  if (order.deliverables && order.deliverables.length > 0) {
+    order.deliverables.forEach((d: any) => {
+      if (d.milestoneIndex === idx || d.milestoneIndex === undefined) {
+        d.status = 'approved';
+      }
+    });
+  }
+
+  const allApproved = order.milestones.every((m: any) => m.status === 'approved');
+  if (allApproved) {
+    order.status = 'completed';
+    order.escrowStatus = 'released';
+    order.completedAt = new Date();
+    order.paymentReleasedAt = new Date();
+    await Gig.findByIdAndUpdate(order.gig, { status: 'completed' });
+    invalidateGigsCache(order.gig.toString());
+  } else {
+    order.status = 'active';
+  }
+
+  await order.save();
+
+  // Log Activity
+  await Activity.create({
+    order: order._id,
+    user: req.user.id,
+    type: allApproved ? 'order_completed' : 'milestone_approved',
+    title: allApproved ? 'Contract Completed & Final Milestone Released' : `Milestone ${idx + 1} Approved & Released`,
+    description: `Client approved "${milestone.title}" and released ₹${freelancerEarnings.toLocaleString('en-IN')} net payout to freelancer (10% platform fee: ₹${platformCommission.toLocaleString('en-IN')}) via automated transfer to ${payoutRes.destination}. Ref: ${payoutRes.transferId}`,
+  });
+
+  // Notify freelancer via database Notification and Socket.IO
+  try {
+    const clientUser = await User.findById(req.user.id).select('name');
+    const clientName = clientUser?.name || 'Hirer';
+    const notif = await Notification.create({
+      recipientId: order.freelancer,
+      senderId: req.user.id,
+      type: 'payment_released',
+      title: allApproved ? 'Order Completed & Final Payout Released! 🎉' : `Milestone ${idx + 1} Approved & Payout Dispatched!`,
+      message: `${clientName} approved "${milestone.title}". ₹${freelancerEarnings.toLocaleString('en-IN')} net payout dispatched to your ${payoutRes.destination}.`,
+      conversationId: order.conversation,
+    });
+
+    const io = getIO();
+    if (io) {
+      io.to(order.freelancer.toString()).emit('newNotification', {
+        _id: notif._id,
+        type: notif.type,
+        title: notif.title,
+        message: notif.message,
+        read: false,
+        senderId: { name: clientName },
+      });
+      io.to(`order_${order._id.toString()}`).emit('orderUpdated', {
+        orderId: order._id.toString(),
+        order,
+      });
+    }
+  } catch (err) {
+    console.warn('[Payment] Socket/Notification error on milestone release:', err);
+  }
+
+  return ApiResponse.success(
+    res,
+    {
+      order,
+      isCompleted: allApproved,
+      approvedMilestoneIndex: idx,
+      payout: payoutRes,
+    },
+    `Milestone ${idx + 1} approved! ₹${freelancerEarnings.toLocaleString('en-IN')} payout dispatched to freelancer.`
+  );
 });

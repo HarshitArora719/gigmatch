@@ -27,7 +27,9 @@ import {
   Award,
   Languages,
   Check,
-  DollarSign
+  DollarSign,
+  CreditCard,
+  Wallet,
 } from 'lucide-react';
 import { Github, Linkedin } from '../components/icons/BrandIcons';
 import { toast } from 'sonner';
@@ -117,6 +119,13 @@ export default function EditProfile() {
     languages: '',
     availabilityStatus: 'Available Now',
     preferredWorkTypes: [] as string[],
+    // Payout details for direct automated milestone disbursements
+    payoutMethod: 'upi' as 'upi' | 'bank_transfer',
+    upiId: '',
+    accountHolderName: '',
+    accountNumber: '',
+    ifscCode: '',
+    bankName: '',
   });
 
   const detectCurrentLocation = async (showToast = true) => {
@@ -245,6 +254,12 @@ export default function EditProfile() {
         languages: Array.isArray(p.languages) ? p.languages.join(', ') : (p.languages || ''),
         availabilityStatus: p.availabilityStatus || 'Available Now',
         preferredWorkTypes: Array.isArray(p.preferredWorkTypes) ? p.preferredWorkTypes : [],
+        payoutMethod: (p.payoutDetails?.payoutMethod as 'upi' | 'bank_transfer') || 'upi',
+        upiId: p.payoutDetails?.upiId || '',
+        accountHolderName: p.payoutDetails?.accountHolderName || '',
+        accountNumber: p.payoutDetails?.accountNumber || '',
+        ifscCode: p.payoutDetails?.ifscCode || '',
+        bankName: p.payoutDetails?.bankName || '',
       });
 
       // Automatically fetch current location for hirers/clients if location is empty
@@ -473,6 +488,14 @@ export default function EditProfile() {
         availabilityStatus: formData.availabilityStatus,
         preferredWorkTypes: formData.preferredWorkTypes,
         certifications,
+        payoutDetails: !isClient ? {
+          payoutMethod: formData.payoutMethod,
+          upiId: formData.upiId?.trim(),
+          accountHolderName: formData.accountHolderName?.trim(),
+          accountNumber: formData.accountNumber?.trim(),
+          ifscCode: formData.ifscCode?.trim()?.toUpperCase(),
+          bankName: formData.bankName?.trim(),
+        } : undefined,
       });
 
       updateUser({
@@ -1789,6 +1812,136 @@ export default function EditProfile() {
                 </div>
               </div>
             </section>
+
+            {/* SECTION: DIRECT PAYOUT & ESCROW DISBURSEMENT (SECTION 8 - FREELANCERS) */}
+            {!isClient && (
+              <section className="bg-white rounded-[28px] p-6 sm:p-8 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-6">
+                <div className="flex items-center justify-between border-b border-border/60 pb-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-display text-xl font-bold text-ink">
+                        8. Payout & Bank Details
+                      </h2>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                        Automated Payouts (90% Net)
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink/50 font-medium mt-1">
+                      Set your automated payout destination. When clients approve your milestone deliverables, your 90% net earnings are immediately transferred here via Razorpay Route / IMPS without manual delays.
+                    </p>
+                  </div>
+                  <Wallet size={22} className="text-emerald-600 shrink-0" />
+                </div>
+
+                {/* Payout Method Selector */}
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, payoutMethod: 'upi' })}
+                      className={`w-full sm:flex-1 py-3 px-4 rounded-2xl text-xs font-bold border transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        formData.payoutMethod === 'upi'
+                          ? 'bg-purple/10 border-purple text-purple shadow-sm'
+                          : 'bg-soft border-border text-ink/60 hover:text-ink'
+                      }`}
+                    >
+                      <Sparkles size={14} />
+                      <span>UPI ID (Instant IMPS Payout)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, payoutMethod: 'bank_transfer' })}
+                      className={`w-full sm:flex-1 py-3 px-4 rounded-2xl text-xs font-bold border transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                        formData.payoutMethod === 'bank_transfer'
+                          ? 'bg-purple/10 border-purple text-purple shadow-sm'
+                          : 'bg-soft border-border text-ink/60 hover:text-ink'
+                      }`}
+                    >
+                      <CreditCard size={14} />
+                      <span>Bank Account (NEFT / IMPS)</span>
+                    </button>
+                  </div>
+
+                  {formData.payoutMethod === 'upi' ? (
+                    <div className="space-y-2">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-ink/70">
+                        Virtual Payment Address / UPI ID
+                      </label>
+                      <input
+                        type="text"
+                        value={formData.upiId}
+                        onChange={(e) => setFormData({ ...formData, upiId: e.target.value })}
+                        placeholder="e.g. yourname@okhdfcbank or 9876543210@paytm"
+                        className="w-full bg-soft border border-border rounded-2xl px-4 py-3 text-sm font-semibold text-ink focus:outline-none focus:border-purple focus:bg-white transition-all font-mono"
+                      />
+                      <p className="text-[11px] text-ink/40">
+                        Funds are dispatched directly to your UPI-linked bank account within seconds of milestone approval.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-ink/70">
+                          Account Holder Name
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.accountHolderName}
+                          onChange={(e) => setFormData({ ...formData, accountHolderName: e.target.value })}
+                          placeholder="e.g. John Doe"
+                          className="w-full bg-soft border border-border rounded-2xl px-4 py-3 text-sm font-semibold text-ink focus:outline-none focus:border-purple focus:bg-white transition-all"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-ink/70">
+                          Bank Name
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.bankName}
+                          onChange={(e) => setFormData({ ...formData, bankName: e.target.value })}
+                          placeholder="e.g. HDFC Bank, ICICI Bank, SBI"
+                          className="w-full bg-soft border border-border rounded-2xl px-4 py-3 text-sm font-semibold text-ink focus:outline-none focus:border-purple focus:bg-white transition-all"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-ink/70">
+                          Account Number
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.accountNumber}
+                          onChange={(e) => setFormData({ ...formData, accountNumber: e.target.value })}
+                          placeholder="e.g. 50100234567890"
+                          className="w-full bg-soft border border-border rounded-2xl px-4 py-3 text-sm font-semibold text-ink focus:outline-none focus:border-purple focus:bg-white transition-all font-mono"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold uppercase tracking-wider text-ink/70">
+                          IFSC Code
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.ifscCode}
+                          onChange={(e) => setFormData({ ...formData, ifscCode: e.target.value.toUpperCase() })}
+                          placeholder="e.g. HDFC0001234"
+                          className="w-full bg-soft border border-border rounded-2xl px-4 py-3 text-sm font-semibold text-ink focus:outline-none focus:border-purple focus:bg-white transition-all font-mono uppercase"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200/60 flex items-center gap-2.5 text-xs text-emerald-800 font-medium">
+                    <ShieldCheck size={16} className="text-emerald-700 shrink-0" />
+                    <span>Vault Protected: Your payment details are encrypted and securely used for automated escrow milestone disbursements.</span>
+                  </div>
+                </div>
+              </section>
+            )}
 
             {/* Bottom Save Action Bar */}
             <div className="flex items-center justify-between p-6 bg-white rounded-[28px] border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)]">

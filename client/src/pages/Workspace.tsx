@@ -481,6 +481,19 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
     }
   }, [activeOrderId, fetchOrder]);
 
+  // ── Auto-advance Target Milestone to the Next Unapproved Milestone ────────
+  useEffect(() => {
+    if (order?.milestones && order.milestones.length > 0) {
+      // Find the first milestone that is NOT yet approved
+      const nextUnapprovedIdx = order.milestones.findIndex((m: any) => m.status !== 'approved');
+      if (nextUnapprovedIdx !== -1) {
+        setSelectedMilestoneIdx(nextUnapprovedIdx);
+      } else {
+        setSelectedMilestoneIdx(order.milestones.length - 1);
+      }
+    }
+  }, [activeOrderId, order?.milestones?.map((m: any) => m.status).join(',')]);
+
   // ── Socket.io Connection & User Room ─────────────────────────────────────
   useEffect(() => {
     const currentUserId = (user as any)?._id || (user as any)?.id;
@@ -585,7 +598,14 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
 
     const handleRevisionRequested = (data: any) => {
       console.log('Revision requested via socket:', data);
-      toast.info('Revision requested by client.');
+      const currentUserId = user?.id || (user as any)?._id;
+      const isHirer = user?.role === 'client' || (order && currentUserId === (order.client?._id || order.client));
+      const isRequester = data?.revisionRequest?.requestedBy && currentUserId === data.revisionRequest.requestedBy;
+
+      // Only show the toast on the freelancer side, never to the hirer who requested it
+      if (!isHirer && !isRequester) {
+        toast.info('Revision requested by client.');
+      }
       fetchOrder(activeOrderId);
       fetchActivities(activeOrderId);
     };
@@ -1055,92 +1075,65 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
     }
   };
 
-  // ── Milestone Payment Release (Razorpay + Demo Fallback) ──────────────────
-  const handleReleaseMilestonePayment = async (idx: number) => {
+  // ── Milestone Approval & Escrow Release (Option A Escrow + Route Payout) ──
+  const [milestoneReleaseModalOpen, setMilestoneReleaseModalOpen] = useState(false);
+  const [milestoneToRelease, setMilestoneToRelease] = useState<{ index: number; title: string; amount: number } | null>(null);
+
+  const handleReleaseMilestonePayment = (idx: number) => {
     if (!activeOrderId || !order) return;
-    const m = order.milestones[idx];
+    const m = order.milestones?.[idx];
     if (!m) return;
+
+    // Check sequential locking: previous milestone must be approved
+    if (idx > 0) {
+      const prev = order.milestones?.[idx - 1];
+      if (prev?.status !== 'approved') {
+        toast.error(`Milestone ${idx + 1} is locked until Milestone ${idx} is approved.`);
+        return;
+      }
+    }
+
+    setMilestoneToRelease({
+      index: idx,
+      title: m.title,
+      amount: m.amount,
+    });
+    setMilestoneReleaseModalOpen(true);
+  };
+
+  const handleConfirmMilestoneRelease = async () => {
+    if (!milestoneToRelease || !activeOrderId) return;
+    const idx = milestoneToRelease.index;
 
     setPayingMilestoneIndex(idx);
     setPayingMilestoneLoading(true);
 
     try {
-      const res = await api.post('/api/payments/milestone/create-order', {
+      const res = await api.post('/api/payments/milestone/approve-and-release', {
         orderId: activeOrderId,
         milestoneIndex: idx,
       });
 
-      const data = res.data.data;
+      toast.success(res.data?.message || `Milestone ${idx + 1} approved & payout dispatched!`);
+      setMilestoneReleaseModalOpen(false);
+      setMilestoneToRelease(null);
 
-      if (data.mode === 'razorpay') {
-        await openRazorpayModal({
-          key: data.keyId,
-          amount: data.amount,
-          currency: data.currency || 'INR',
-          name: 'GigMatch',
-          description: `Release Payment: Milestone ${idx + 1} (${m.title})`,
-          order_id: data.orderId,
-          prefill: {
-            name: user?.name,
-            email: user?.email,
-          },
-          handler: async (response) => {
-            try {
-              const verifyRes = await api.post('/api/payments/milestone/verify-signature', {
-                orderId: activeOrderId,
-                milestoneIndex: idx,
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature,
-              });
+      // Auto-advance target milestone to the next milestone
+      if (idx + 1 < (order?.milestones?.length || 0)) {
+        setSelectedMilestoneIdx(idx + 1);
+      }
 
-              toast.success(`Milestone ${idx + 1} approved & payment released!`);
-              await fetchOrder(activeOrderId);
-              await fetchActivities(activeOrderId);
+      await fetchOrder(activeOrderId);
+      await fetchActivities(activeOrderId);
 
-              if (verifyRes.data?.data?.isCompleted) {
-                toast.success('All contract milestones completed! 🎉');
-                navigate(`/dashboard?tab=Reviews %26 History&writeReview=${activeOrderId}`);
-                if (onNavigateTab) onNavigateTab('Reviews & History');
-              }
-            } catch (vErr: any) {
-              toast.error(vErr.response?.data?.message || 'Payment signature verification failed.');
-            } finally {
-              setPayingMilestoneLoading(false);
-              setPayingMilestoneIndex(null);
-            }
-          },
-          onDismiss: () => {
-            toast.info('Payment was cancelled.');
-            setPayingMilestoneLoading(false);
-            setPayingMilestoneIndex(null);
-          },
-          onFailed: async (err) => {
-            toast.error(err?.description || 'Razorpay payment failed.');
-            await api.post('/api/payments/record-failure', {
-              razorpay_order_id: data.orderId,
-              reason: err?.description || 'Milestone payment failed',
-            });
-            setPayingMilestoneLoading(false);
-            setPayingMilestoneIndex(null);
-          },
-        });
-      } else {
-        // Fallback: Demo Payment Modal
-        setDemoPaymentDetails({
-          orderId: activeOrderId,
-          milestoneIndex: idx,
-          milestoneTitle: m.title,
-          gigTitle: order.gig?.title,
-          totalAmount: data.totalAmount,
-          platformCommission: data.platformCommission,
-          freelancerEarnings: data.freelancerEarnings,
-        });
-        setDemoPaymentModalOpen(true);
-        setPayingMilestoneLoading(false);
+      if (res.data?.data?.isCompleted) {
+        toast.success('All contract milestones completed! 🎉');
+        navigate(`/dashboard?tab=Reviews %26 History&writeReview=${activeOrderId}`);
+        if (onNavigateTab) onNavigateTab('Reviews & History');
       }
     } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Failed to initiate milestone release');
+      toast.error(err.response?.data?.message || 'Failed to approve milestone and release payout');
+    } finally {
       setPayingMilestoneLoading(false);
       setPayingMilestoneIndex(null);
     }
@@ -1152,7 +1145,7 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
 
     setPayingMilestoneLoading(true);
     try {
-      const res = await api.post('/api/payments/milestone/demo-payment', {
+      const res = await api.post('/api/payments/milestone/approve-and-release', {
         orderId: activeOrderId,
         milestoneIndex: idx,
       });
@@ -1160,6 +1153,9 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
       toast.success(`Milestone ${idx + 1} approved & ₹${demoPaymentDetails.totalAmount.toLocaleString('en-IN')} released!`);
       setDemoPaymentModalOpen(false);
       setDemoPaymentDetails(null);
+      if (idx + 1 < (order?.milestones?.length || 0)) {
+        setSelectedMilestoneIdx(idx + 1);
+      }
       await fetchOrder(activeOrderId);
       await fetchActivities(activeOrderId);
 
@@ -1659,6 +1655,33 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
             </section>
           )}
 
+          {/* B1. HIRER AWAITING REVISION BANNER */}
+          {isClient && order.status === 'revision_requested' && (
+            <section className="bg-amber-50/70 rounded-[28px] p-5 sm:p-6 border border-amber-200/90 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0 mt-0.5">
+                  <RefreshCw size={18} />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="font-display font-bold text-sm sm:text-base text-amber-950">
+                    Revision Requested
+                  </h4>
+                  <p className="text-xs text-amber-900/80 font-medium">
+                    You requested changes on the previous submission. Waiting for {otherPartyName} to upload updated deliverables.
+                  </p>
+                  {latestRevisionRequest?.message && (
+                    <div className="bg-white/90 rounded-xl p-2.5 border border-amber-200 text-xs text-amber-900 font-medium italic mt-2">
+                      "{latestRevisionRequest.message}"
+                    </div>
+                  )}
+                </div>
+              </div>
+              <span className="text-xs font-bold text-amber-800 bg-amber-100 px-3 py-1.5 rounded-full border border-amber-300 self-start sm:self-auto shrink-0">
+                Awaiting Resubmission
+              </span>
+            </section>
+          )}
+
           {/* B. CLIENT REVIEW PANEL (When deliverables exist and awaiting review) */}
           {isClient && order.status === 'delivered' && (
             <section className="bg-gradient-to-br from-blue-50/80 via-white to-purple-50/50 rounded-[28px] p-6 sm:p-7 border-2 border-blue-200/80 shadow-md space-y-4">
@@ -1872,7 +1895,7 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
                   >
                     {order.milestones.map((m: any, idx: number) => (
                       <option key={idx} value={idx}>
-                        Milestone {idx + 1}: {m.title} ({formatCurrency(m.amount)}) {m.status === 'approved' ? '✓ Paid' : m.status === 'submitted' ? '⏳ Under Review' : ''}
+                        Milestone {idx + 1}: {m.title} ({formatCurrency(m.amount)}) {m.status === 'approved' ? '✓ Paid' : m.status === 'submitted' ? '⏳ Under Review' : m.status === 'in_progress' ? '⚡ In Progress' : ''}
                       </option>
                     ))}
                   </select>
@@ -3047,6 +3070,96 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
       </Dialog>
 
       {/* ====================================================
+          MODAL: APPROVE MILESTONE & RELEASE ESCROW PAYOUT
+          Option A (100% Upfront Escrow) + Way B (Automated Payout)
+          ==================================================== */}
+      <Dialog open={milestoneReleaseModalOpen} onOpenChange={setMilestoneReleaseModalOpen}>
+        <DialogContent className="max-w-md bg-white rounded-[28px] p-6 sm:p-7 border border-border shadow-2xl">
+          {milestoneToRelease && (
+            <div className="space-y-5">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 flex items-center justify-center text-emerald-600 border border-emerald-200/60 shrink-0">
+                  <ShieldCheck size={24} />
+                </div>
+                <div>
+                  <span className="inline-block text-[10px] font-extrabold uppercase tracking-widest text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 mb-1">
+                    Escrow Vault Release
+                  </span>
+                  <DialogTitle className="font-display text-lg font-bold text-ink">
+                    Approve Milestone & Release Payout
+                  </DialogTitle>
+                </div>
+              </div>
+
+              <DialogDescription className="text-xs text-ink/70 leading-relaxed text-left">
+                Your upfront escrow funds are safely vaulted. Releasing this milestone <strong className="text-ink">will NOT charge your card or account again</strong>. It dispatches net earnings directly to <strong>{otherPartyName}</strong>.
+              </DialogDescription>
+
+              {/* Financial Breakdown */}
+              <div className="bg-soft/70 rounded-2xl p-4 border border-border/50 space-y-2 text-xs">
+                <div className="pb-2 border-b border-border/40 flex items-center justify-between">
+                  <span className="text-ink/60 font-medium">Sprint Milestone {milestoneToRelease.index + 1}:</span>
+                  <span className="font-bold text-ink truncate max-w-[200px]">{milestoneToRelease.title}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-ink/70">
+                  <span>Milestone Value:</span>
+                  <span className="font-bold text-ink text-sm">{formatCurrency(milestoneToRelease.amount)}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-ink/60">
+                  <span>Platform Fee (10%):</span>
+                  <span className="font-medium text-coral">-{formatCurrency(Math.round(milestoneToRelease.amount * 0.10))}</span>
+                </div>
+
+                <div className="flex items-center justify-between text-ink/60">
+                  <span>Freelancer Payout (90% net):</span>
+                  <span className="font-semibold text-emerald-700">{formatCurrency(milestoneToRelease.amount - Math.round(milestoneToRelease.amount * 0.10))}</span>
+                </div>
+
+                <div className="pt-2 border-t border-border/40 flex items-center justify-between">
+                  <span className="text-[11px] text-ink/50">Disbursement Account:</span>
+                  <span className="text-[11px] font-bold text-purple truncate max-w-[190px]">
+                    {(order?.freelancer as any)?.payoutDestination || 'Direct UPI / IMPS Payout'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border/50">
+                <button
+                  type="button"
+                  onClick={() => setMilestoneReleaseModalOpen(false)}
+                  disabled={payingMilestoneLoading}
+                  className="btn-secondary !py-2 !px-4 !text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmMilestoneRelease}
+                  disabled={payingMilestoneLoading}
+                  className="btn-primary !py-2.5 !px-5 !text-xs font-bold cursor-pointer bg-emerald-600 hover:bg-emerald-700 text-white inline-flex items-center gap-1.5"
+                >
+                  {payingMilestoneLoading ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>Releasing Payout...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check size={14} />
+                      <span>Approve & Release {formatCurrency(milestoneToRelease.amount - Math.round(milestoneToRelease.amount * 0.10))}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ====================================================
           MODAL: RAZORPAY ESCROW GATEWAY & DEMO FALLBACK
           ==================================================== */}
       <Dialog open={razorpayModalOpen} onOpenChange={setRazorpayModalOpen}>
@@ -3077,12 +3190,12 @@ export default function WorkspaceView({ orderId: propOrderId, initialOrders, onS
                   <span className="font-bold text-ink text-sm">{formatCurrency(order.totalAmount || 0)}</span>
                 </div>
                 <div className="flex items-center justify-between text-ink/60">
-                  <span>Platform Commission (25%):</span>
-                  <span className="font-medium text-purple">{formatCurrency(Math.round((order.totalAmount || 0) * 0.25))}</span>
+                  <span>Platform Commission (10%):</span>
+                  <span className="font-medium text-purple">{formatCurrency(Math.round((order.totalAmount || 0) * 0.10))}</span>
                 </div>
                 <div className="flex items-center justify-between text-ink/60">
-                  <span>Freelancer Payout (75%):</span>
-                  <span className="font-medium text-emerald-600">{formatCurrency((order.totalAmount || 0) - Math.round((order.totalAmount || 0) * 0.25))}</span>
+                  <span>Freelancer Payout (90%):</span>
+                  <span className="font-medium text-emerald-600">{formatCurrency((order.totalAmount || 0) - Math.round((order.totalAmount || 0) * 0.10))}</span>
                 </div>
               </div>
             )}
