@@ -401,46 +401,53 @@ export default function EditProfile() {
       return Math.min(100, Math.max(score, 15));
     }
 
-    // Freelancer Dynamic Completeness Score (5 Sections x 20%)
+    // Freelancer Dynamic Completeness Score (6 Sections)
     let score = 0;
 
-    // 1. Personal Information (Name, Professional Title, Location, Avatar)
+    // 1. Personal Information (Name, Professional Title, Location, Avatar) - 15 pts
     let s1 = 0;
-    if (formData.name.trim().length > 0) s1 += 5;
-    if (formData.roleTitle.trim().length > 0) s1 += 5;
-    if (formData.location.trim().length > 0) s1 += 5;
-    if (avatar) s1 += 5;
+    if (formData.name.trim().length > 0) s1 += 4;
+    if (formData.roleTitle.trim().length > 0) s1 += 4;
+    if (formData.location.trim().length > 0) s1 += 4;
+    if (avatar) s1 += 3;
     score += s1;
 
-    // 2. About Me (Bio, Skills, Experience, Languages)
+    // 2. About Me (Bio, Skills, Experience, Languages) - 15 pts
     let s2 = 0;
-    if (formData.bio.trim().length >= 10) s2 += 5;
-    if (formData.skills.trim().length > 0) s2 += 5;
-    if (formData.experience !== '' && Number(formData.experience) >= 0) s2 += 5;
-    if (formData.languages.trim().length > 0) s2 += 5;
+    if (formData.bio.trim().length >= 10) s2 += 4;
+    if (formData.skills.trim().length > 0) s2 += 4;
+    if (formData.experience !== '' && Number(formData.experience) >= 0) s2 += 4;
+    if (formData.languages.trim().length > 0) s2 += 3;
     score += s2;
 
-    // 3. Professional Links (GitHub, LinkedIn, Portfolio, Resume)
+    // 3. Professional Links (GitHub, LinkedIn, Portfolio, Resume) - 15 pts
     let s3 = 0;
-    if (formData.githubUrl.trim().length > 0) s3 += 5;
-    if (formData.linkedinUrl.trim().length > 0) s3 += 5;
-    if (formData.portfolioUrl.trim().length > 0) s3 += 5;
-    if (formData.resumeUrl.trim().length > 0) s3 += 5;
+    if (formData.githubUrl.trim().length > 0) s3 += 4;
+    if (formData.linkedinUrl.trim().length > 0) s3 += 4;
+    if (formData.portfolioUrl.trim().length > 0) s3 += 4;
+    if (formData.resumeUrl.trim().length > 0) s3 += 3;
     score += s3;
 
-    // 4. Portfolio Projects (At least 1 project)
+    // 4. Portfolio Projects (At least 1 project) - 20 pts
     if (portfolio.length > 0) {
       score += 20;
     }
 
-    // 5. Work Preferences (Availability Status, Hourly Rate, Preferred Work Types)
+    // 5. Work Preferences (Availability Status, Hourly Rate, Preferred Work Types) - 15 pts
     let s5 = 0;
-    if (formData.availabilityStatus.trim().length > 0) s5 += 7;
-    if (Number(formData.hourlyRate) > 0) s5 += 7;
-    if (formData.preferredWorkTypes && formData.preferredWorkTypes.length > 0) s5 += 6;
+    if (formData.availabilityStatus.trim().length > 0) s5 += 5;
+    if (Number(formData.hourlyRate) > 0) s5 += 5;
+    if (formData.preferredWorkTypes && formData.preferredWorkTypes.length > 0) s5 += 5;
     score += s5;
 
-    return Math.min(100, Math.max(score, 20));
+    // 6. Payout & Escrow Destination (UPI ID or Bank Details) - 20 pts
+    const hasUpi = Boolean(formData.upiId && formData.upiId.trim().length > 0);
+    const hasBank = Boolean(formData.accountNumber && formData.accountNumber.trim().length > 0);
+    if (hasUpi || hasBank) {
+      score += 20;
+    }
+
+    return Math.min(100, Math.max(score, 15));
   };
 
   const score = calculateScore();

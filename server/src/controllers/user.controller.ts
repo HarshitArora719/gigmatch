@@ -11,32 +11,32 @@ import { ApiResponse } from '../utils/apiResponse';
 import { invalidateUserCache } from '../middleware/auth.middleware';
 
 export const calculateProfileScore = (user: any, profile: any): number => {
-  // If freelancer, calculate dynamically based on the 5 distinct completed sections
+  // If freelancer, calculate dynamically based on the 6 distinct completed sections
   if (user?.role === 'freelancer') {
     let score = 0;
 
-    // Section 1: Personal Information (Name, Role Title, Location, Avatar) - 20 pts
+    // Section 1: Personal Information (Name, Role Title, Location, Avatar) - 15 pts
     let s1 = 0;
-    if (user?.name && user.name.trim().length > 0) s1 += 5;
-    if (profile?.roleTitle && profile.roleTitle.trim().length > 0) s1 += 5;
-    if (profile?.location && profile.location.trim().length > 0) s1 += 5;
-    if (user?.avatar || profile?.avatar) s1 += 5;
+    if (user?.name && user.name.trim().length > 0) s1 += 4;
+    if (profile?.roleTitle && profile.roleTitle.trim().length > 0) s1 += 4;
+    if (profile?.location && profile.location.trim().length > 0) s1 += 4;
+    if (user?.avatar || profile?.avatar) s1 += 3;
     score += s1;
 
-    // Section 2: About Me (Bio, Skills, Experience, Languages) - 20 pts
+    // Section 2: About Me (Bio, Skills, Experience, Languages) - 15 pts
     let s2 = 0;
-    if (profile?.bio && profile.bio.trim().length >= 10) s2 += 5;
-    if (Array.isArray(profile?.skills) && profile.skills.length > 0) s2 += 5;
-    if (profile?.experience !== undefined && Number(profile.experience) >= 0) s2 += 5;
-    if (Array.isArray(profile?.languages) && profile.languages.length > 0) s2 += 5;
+    if (profile?.bio && profile.bio.trim().length >= 10) s2 += 4;
+    if (Array.isArray(profile?.skills) && profile.skills.length > 0) s2 += 4;
+    if (profile?.experience !== undefined && Number(profile.experience) >= 0) s2 += 4;
+    if (Array.isArray(profile?.languages) && profile.languages.length > 0) s2 += 3;
     score += s2;
 
-    // Section 3: Professional Links (GitHub, LinkedIn, Portfolio, Resume) - 20 pts
+    // Section 3: Professional Links (GitHub, LinkedIn, Portfolio, Resume) - 15 pts
     let s3 = 0;
-    if (profile?.githubUrl && profile.githubUrl.trim().length > 0) s3 += 5;
-    if (profile?.linkedinUrl && profile.linkedinUrl.trim().length > 0) s3 += 5;
-    if (profile?.portfolioUrl && profile.portfolioUrl.trim().length > 0) s3 += 5;
-    if (profile?.resumeUrl && profile.resumeUrl.trim().length > 0) s3 += 5;
+    if (profile?.githubUrl && profile.githubUrl.trim().length > 0) s3 += 4;
+    if (profile?.linkedinUrl && profile.linkedinUrl.trim().length > 0) s3 += 4;
+    if (profile?.portfolioUrl && profile.portfolioUrl.trim().length > 0) s3 += 4;
+    if (profile?.resumeUrl && profile.resumeUrl.trim().length > 0) s3 += 3;
     score += s3;
 
     // Section 4: Portfolio Projects (At least 1 project in portfolio) - 20 pts
@@ -44,14 +44,21 @@ export const calculateProfileScore = (user: any, profile: any): number => {
       score += 20;
     }
 
-    // Section 5: Work Preferences (Availability Status, Hourly Rate, Preferred Work Types) - 20 pts
+    // Section 5: Work Preferences (Availability Status, Hourly Rate, Preferred Work Types) - 15 pts
     let s5 = 0;
-    if (profile?.availabilityStatus && profile.availabilityStatus.trim().length > 0) s5 += 7;
-    if (profile?.hourlyRate !== undefined && Number(profile.hourlyRate) > 0) s5 += 7;
-    if (Array.isArray(profile?.preferredWorkTypes) && profile.preferredWorkTypes.length > 0) s5 += 6;
+    if (profile?.availabilityStatus && profile.availabilityStatus.trim().length > 0) s5 += 5;
+    if (profile?.hourlyRate !== undefined && Number(profile.hourlyRate) > 0) s5 += 5;
+    if (Array.isArray(profile?.preferredWorkTypes) && profile.preferredWorkTypes.length > 0) s5 += 5;
     score += s5;
 
-    return Math.min(100, Math.max(score, 20));
+    // Section 6: Payout & Escrow Destination (UPI ID or Bank Details) - 20 pts
+    const hasUpi = Boolean(profile?.payoutDetails?.upiId && profile.payoutDetails.upiId.trim().length > 0);
+    const hasBank = Boolean(profile?.payoutDetails?.accountNumber && profile.payoutDetails.accountNumber.trim().length > 0);
+    if (hasUpi || hasBank) {
+      score += 20;
+    }
+
+    return Math.min(100, Math.max(score, 15));
   }
 
   // Hirer / Client calculation - 100% UNCHANGED & INTACT
@@ -88,7 +95,7 @@ export const getMe = asyncHandler(async (req: any, res: Response) => {
   const [user, profileDoc] = await Promise.all([
     User.findById(req.user.id).select('_id name email role avatar avatarColor isVerified createdAt').lean(),
     Profile.findOne({ user: req.user.id })
-      .select('bio roleTitle company website teamSize industry location responseTime skills hourlyRate experience avatar avatarColor rating totalReviews completedGigs profileCompletion githubUrl linkedinUrl portfolioUrl resumeUrl languages availabilityStatus preferredWorkTypes certifications')
+      .select('bio roleTitle company website teamSize industry location responseTime skills hourlyRate experience avatar avatarColor rating totalReviews completedGigs profileCompletion githubUrl linkedinUrl portfolioUrl resumeUrl languages availabilityStatus preferredWorkTypes certifications payoutDetails')
       .lean(),
   ]);
   
@@ -122,6 +129,14 @@ export const getMe = asyncHandler(async (req: any, res: Response) => {
   }
 
   const completionScore = calculateProfileScore(user, profile);
+  if (profile.profileCompletion !== completionScore || profile.profileCompletionPercentage !== completionScore) {
+    profile.profileCompletion = completionScore;
+    profile.profileCompletionPercentage = completionScore;
+    Profile.findByIdAndUpdate(profile._id, {
+      profileCompletion: completionScore,
+      profileCompletionPercentage: completionScore,
+    }).catch(err => console.error('Score sync error:', err));
+  }
 
   const responsePayload = {
     user: {
@@ -158,6 +173,7 @@ export const getMe = asyncHandler(async (req: any, res: Response) => {
       availabilityStatus: profile.availabilityStatus || 'Available Now',
       preferredWorkTypes: profile.preferredWorkTypes || [],
       certifications: profile.certifications || [],
+      payoutDetails: profile.payoutDetails || { payoutMethod: 'upi', upiId: '' },
       verificationStatus: {
         emailVerified: true,
         phoneVerified: false,
@@ -467,6 +483,14 @@ export const getUserProfileById = asyncHandler(async (req: any, res: Response) =
 
   // 5. Dynamic Profile Completion
   const completionScore = calculateProfileScore(user, profile);
+  if (profile.profileCompletion !== completionScore || profile.profileCompletionPercentage !== completionScore) {
+    profile.profileCompletion = completionScore;
+    profile.profileCompletionPercentage = completionScore;
+    Profile.findByIdAndUpdate(profile._id, {
+      profileCompletion: completionScore,
+      profileCompletionPercentage: completionScore,
+    }).catch(err => console.error('Score sync error:', err));
+  }
 
   // 6. Permissions
   const isOwner = Boolean(req.user && req.user.id.toString() === targetUserId.toString());
@@ -511,6 +535,7 @@ export const getUserProfileById = asyncHandler(async (req: any, res: Response) =
       availabilityStatus: profile.availabilityStatus || 'Available Now',
       preferredWorkTypes: profile.preferredWorkTypes || [],
       certifications: profile.certifications || [],
+      payoutDetails: isOwner ? (profile.payoutDetails || { payoutMethod: 'upi', upiId: '' }) : undefined,
       verificationStatus: {
         emailVerified: true,
         phoneVerified: false,

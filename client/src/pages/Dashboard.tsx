@@ -73,12 +73,15 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState(
     isFreelancer && tabFromUrl === 'Projects' ? 'Dashboard' : (tabFromUrl || 'Dashboard')
   );
+  const activeTabRef = useRef(activeTab);
+  const mainScrollRef = useRef<HTMLDivElement>(null);
 
-  // Sync activeTab whenever URL searchParams change (with case-insensitivity)
+  // Sync activeTab whenever URL searchParams change externally (e.g. Back/Forward)
   useEffect(() => {
     const tabParam = searchParams.get('tab');
     if (!tabParam) {
-      if (activeTab !== 'Dashboard') {
+      if (activeTabRef.current !== 'Dashboard') {
+        activeTabRef.current = 'Dashboard';
         setActiveTab('Dashboard');
       }
       return;
@@ -86,19 +89,16 @@ export default function Dashboard() {
     const canonicalTab = ['Dashboard', 'Workspace', 'Proposals', 'Orders', 'Messages', 'Payments', 'Reviews & History', 'Projects'].find(
       t => t.toLowerCase() === tabParam.toLowerCase()
     );
-    if (canonicalTab && canonicalTab !== activeTab) {
-      if (isFreelancer && canonicalTab === 'Projects') {
-        setActiveTab('Dashboard');
-      } else {
-        setActiveTab(canonicalTab);
-      }
+    if (canonicalTab && canonicalTab !== activeTabRef.current) {
+      const target = isFreelancer && canonicalTab === 'Projects' ? 'Dashboard' : canonicalTab;
+      activeTabRef.current = target;
+      setActiveTab(target);
     }
-  }, [searchParams, isFreelancer, activeTab]);
+  }, [searchParams, isFreelancer]);
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
-  const activeTabRef = useRef(activeTab);
   useEffect(() => {
     activeTabRef.current = activeTab;
   }, [activeTab]);
@@ -138,6 +138,10 @@ export default function Dashboard() {
   const [editGigBudget, setEditGigBudget] = useState('');
   const [editGigStatus, setEditGigStatus] = useState('open');
   const [savingGig, setSavingGig] = useState(false);
+
+  // Delete Gig Modal state
+  const [deleteGigTargetId, setDeleteGigTargetId] = useState<string | null>(null);
+  const [deletingGig, setDeletingGig] = useState(false);
 
 
 
@@ -702,32 +706,60 @@ export default function Dashboard() {
       )?._id ||
       dashboardData.orders[0]?._id;
 
-    if (targetOrderId) {
-      setSearchParams({ tab: 'Workspace', orderId: targetOrderId });
-    } else {
-      setSearchParams({ tab: 'Workspace' });
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('tab', 'Workspace');
+      if (targetOrderId) {
+        next.set('orderId', targetOrderId);
+      }
+      return next;
+    }, { replace: true });
+
+    if (mainScrollRef.current && mainScrollRef.current.scrollTop > 0) {
+      mainScrollRef.current.scrollTop = 0;
     }
     if (window.scrollY > 0) {
-      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, behavior: 'instant' });
     }
   };
 
   const handleTabClick = (tabName: string) => {
+    if (activeTab === tabName) {
+      if (mainScrollRef.current && mainScrollRef.current.scrollTop > 0) {
+        mainScrollRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (window.scrollY > 0) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      return;
+    }
     activeTabRef.current = tabName;
     if (tabName === 'Workspace') {
       handleOpenWorkspace(searchParams.get('orderId') || undefined);
       return;
     }
     setActiveTab(tabName);
-    setSearchParams({ tab: tabName });
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (tabName === 'Dashboard') {
+        next.delete('tab');
+      } else {
+        next.set('tab', tabName);
+      }
+      return next;
+    }, { replace: true });
+
     if (tabName === 'Messages') {
       const threadToOpen = selectedInboxThread || (inboxThreads.length > 0 ? inboxThreads[0] : null);
       if (threadToOpen) {
         handleSelectConversation(threadToOpen);
       }
     }
+
+    if (mainScrollRef.current && mainScrollRef.current.scrollTop > 0) {
+      mainScrollRef.current.scrollTop = 0;
+    }
     if (window.scrollY > 0) {
-      window.scrollTo(0, 0);
+      window.scrollTo({ top: 0, behavior: 'instant' });
     }
   };
 
@@ -1126,7 +1158,7 @@ export default function Dashboard() {
   // ----------------------------------------------------
   // PAYMENTS — Derived from real orders & milestones
   // ----------------------------------------------------
-  const pendingPaymentsFromOrders = dashboardData.orders
+  const pendingPaymentsFromOrders = useMemo(() => dashboardData.orders
     .flatMap((o: any, oi: number) => {
       const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
       const counterparty = counterpartyUser?.name || (user?.role === 'client' ? `Creator ${oi + 1}` : `Client ${oi + 1}`);
@@ -1155,7 +1187,7 @@ export default function Dashboard() {
           status: 'Awaiting Release',
           isOverdue: false,
         }));
-    });
+    }), [dashboardData.orders, user?.role]);
 
   const [pendingPaymentsList, setPendingPaymentsList] = useState<any[]>([]);
 
@@ -1164,9 +1196,9 @@ export default function Dashboard() {
     if (!dashboardData.loading && dashboardData.orders.length > 0) {
       setPendingPaymentsList(pendingPaymentsFromOrders);
     }
-  }, [dashboardData.orders, dashboardData.loading]);
+  }, [pendingPaymentsFromOrders, dashboardData.loading]);
 
-  const completedPaymentsFromOrders = dashboardData.orders
+  const completedPaymentsFromOrders = useMemo(() => dashboardData.orders
     .flatMap((o: any, oi: number) => {
       const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
       const counterparty = counterpartyUser?.name || (user?.role === 'client' ? `Creator ${oi + 1}` : `Client ${oi + 1}`);
@@ -1191,7 +1223,7 @@ export default function Dashboard() {
           status: 'Paid' as const,
           receiptId: `REC-${(o._id || '').toString().slice(-4).toUpperCase()}${mi}`,
         }));
-    });
+    }), [dashboardData.orders, user?.role]);
 
   const [paymentHistoryList, setPaymentHistoryList] = useState<any[]>([]);
 
@@ -1199,7 +1231,7 @@ export default function Dashboard() {
     if (!dashboardData.loading) {
       setPaymentHistoryList(completedPaymentsFromOrders);
     }
-  }, [dashboardData.orders, dashboardData.loading]);
+  }, [completedPaymentsFromOrders, dashboardData.loading]);
 
   const handlePayNow = async (pendingItem: any) => {
     try {
@@ -1231,15 +1263,15 @@ export default function Dashboard() {
   // REVIEWS & HISTORY — Derived from real reviews/orders
   // ----------------------------------------------------
   // Completed orders that user has NOT yet reviewed
-  const reviewedOrderIds = new Set(
+  const reviewedOrderIds = useMemo(() => new Set(
     dashboardData.reviews
       .filter((r: any) => (r.from?._id === user?.id || r.from === user?.id))
       .map((r: any) => r.order?._id || r.order)
       .filter(Boolean)
       .map((id: any) => id.toString())
-  );
+  ), [dashboardData.reviews, user?.id]);
 
-  const pendingReviewsFromOrders = dashboardData.orders
+  const pendingReviewsFromOrders = useMemo(() => dashboardData.orders
     .filter((o: any) => o.status === 'completed' && !reviewedOrderIds.has(o._id?.toString()))
     .map((o: any, i: number) => {
       const counterpartyUser = user?.role === 'client' ? o.freelancer : o.client;
@@ -1262,7 +1294,7 @@ export default function Dashboard() {
         deliverables: (o.milestones || []).map((m: any) => m.title),
         orderId: o._id,
       };
-    });
+    }), [dashboardData.orders, reviewedOrderIds, user?.role]);
 
   const [pendingReviewsList, setPendingReviewsList] = useState<any[]>([]);
 
@@ -1270,7 +1302,7 @@ export default function Dashboard() {
     if (!dashboardData.loading) {
       setPendingReviewsList(pendingReviewsFromOrders);
     }
-  }, [dashboardData.orders, dashboardData.reviews, dashboardData.loading]);
+  }, [pendingReviewsFromOrders, dashboardData.loading]);
 
   // Reviews and completed orders mapped to completed projects view
   const completedProjectsFromOrdersAndReviews = useMemo(() => {
@@ -1573,14 +1605,22 @@ export default function Dashboard() {
     }
   };
 
-  const handleDeleteGig = async (gigId: string) => {
-    if (!window.confirm('Are you sure you want to delete this project brief? This action cannot be undone.')) return;
+  const handleDeleteGig = (gigId: string) => {
+    setDeleteGigTargetId(gigId);
+  };
+
+  const handleConfirmDeleteGig = async () => {
+    if (!deleteGigTargetId) return;
+    setDeletingGig(true);
     try {
-      await api.delete(`/api/gigs/${gigId}`);
+      await api.delete(`/api/gigs/${deleteGigTargetId}`);
       toast.success('Project brief deleted successfully');
       dashboardData.refetch();
+      setDeleteGigTargetId(null);
     } catch {
       toast.error('Failed to delete gig');
+    } finally {
+      setDeletingGig(false);
     }
   };
 
@@ -1873,12 +1913,12 @@ export default function Dashboard() {
   }).format(new Date()).toUpperCase();
 
   return (
-    <div className="min-h-screen bg-paper text-ink flex flex-col lg:flex-row antialiased selection:bg-purple/15 selection:text-ink">
+    <div className="min-h-screen lg:h-screen lg:overflow-hidden bg-paper text-ink flex flex-col lg:flex-row antialiased selection:bg-purple/15 selection:text-ink">
       
       {/* ====================================================
           LEFT SIDEBAR (Fixed / Sticky 252px, Background #18181B)
           ==================================================== */}
-      <aside className="hidden lg:flex flex-col w-[252px] h-screen sticky top-0 bg-[#18181B] text-white p-[28px_18px] justify-between z-30 shrink-0 select-none border-r border-white/5">
+      <aside className="hidden lg:flex flex-col w-[252px] h-full bg-[#18181B] text-white p-[28px_18px] justify-between z-30 shrink-0 select-none border-r border-white/5">
         <div className="flex flex-col">
           {/* Top Logo */}
           <Link
@@ -1933,7 +1973,7 @@ export default function Dashboard() {
                 <button
                   key={item.name}
                   onClick={() => handleTabClick(item.name)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-[14px] text-sm font-semibold transition-all duration-200 cursor-pointer text-left ${
+                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-[14px] text-sm font-semibold transition-colors duration-150 cursor-pointer text-left ${
                     isActive
                       ? 'bg-gradient-to-r from-[#7C3AED] to-[#FF6B6B] text-white shadow-md shadow-purple/20'
                       : 'text-white/70 hover:text-white hover:bg-white/[0.06]'
@@ -2050,7 +2090,7 @@ export default function Dashboard() {
                         handleTabClick(item.name);
                         setSidebarOpen(false);
                       }}
-                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-[14px] text-sm font-semibold transition-all cursor-pointer text-left ${
+                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-[14px] text-sm font-semibold transition-colors duration-150 cursor-pointer text-left ${
                         isActive
                           ? 'bg-gradient-to-r from-[#7C3AED] to-[#FF6B6B] text-white'
                           : 'text-white/70 hover:text-white hover:bg-white/[0.06]'
@@ -2081,10 +2121,10 @@ export default function Dashboard() {
       {/* ====================================================
           MAIN DASHBOARD WORKSPACE (Right Column)
           ==================================================== */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto bg-paper">
+      <main ref={mainScrollRef} className="flex-1 flex flex-col min-w-0 h-full overflow-y-auto bg-paper">
         
         {/* TOP UTILITY BAR */}
-        <header className="sticky top-0 z-20 bg-paper/90 backdrop-blur-md border-b border-border px-4 sm:px-6 md:px-8 py-3.5 flex items-center justify-between gap-4">
+        <header className="sticky top-0 z-20 shrink-0 bg-paper/90 backdrop-blur-md border-b border-border px-4 sm:px-6 md:px-8 py-3.5 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 flex-1 max-w-[480px]">
             <button
               onClick={() => setSidebarOpen(true)}
@@ -2277,7 +2317,8 @@ export default function Dashboard() {
         {/* ====================================================
             MAIN WORKSPACE CONTENT ROUTING / TAB VIEWS
             ==================================================== */}
-        <div className="flex-1 px-4 sm:px-6 md:px-8 py-8 max-w-[1400px] w-full mx-auto space-y-9">
+        <div className="flex-1 px-4 sm:px-6 md:px-8 py-8 max-w-[1400px] w-full mx-auto">
+          <div key={activeTab} className="tab-pane-transition space-y-9">
 
           {/* ====================================================
               VIEW: WORKSPACE VIEW
@@ -5372,6 +5413,7 @@ export default function Dashboard() {
               </>
             )
           )}
+          </div>
         </div>
       </main>
 
@@ -6152,6 +6194,49 @@ export default function Dashboard() {
         onConfirm={handleConfirmDemoPayment}
         loading={demoPaymentLoading}
       />
+
+      {/* ====================================================
+          MODAL: CONFIRM DELETE GIG BRIEF
+          ==================================================== */}
+      <Dialog open={Boolean(deleteGigTargetId)} onOpenChange={(open) => !open && setDeleteGigTargetId(null)}>
+        <DialogContent className="max-w-md bg-white rounded-[24px] p-6 border border-border/70 shadow-2xl space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-coral/10 text-coral flex items-center justify-center shrink-0">
+              <Trash2 size={20} />
+            </div>
+            <div>
+              <DialogTitle className="font-display text-lg font-bold text-ink">
+                Delete Project Brief?
+              </DialogTitle>
+              <DialogDescription className="text-xs text-ink/60 mt-0.5">
+                This action is permanent and cannot be undone.
+              </DialogDescription>
+            </div>
+          </div>
+          <p className="text-xs text-ink/70 leading-relaxed">
+            Deleting this gig will also remove any received proposals. Are you sure you want to proceed?
+          </p>
+          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border/40">
+            <button
+              type="button"
+              onClick={() => setDeleteGigTargetId(null)}
+              disabled={deletingGig}
+              className="btn-secondary !py-2 !px-4 !text-xs cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDeleteGig}
+              disabled={deletingGig}
+              className="!py-2 !px-4 !text-xs rounded-full font-bold text-white bg-coral hover:bg-coral/90 transition-all flex items-center gap-1.5 cursor-pointer border-0 shadow-sm"
+            >
+              {deletingGig ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+              <span>{deletingGig ? 'Deleting...' : 'Delete Brief'}</span>
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
     </div>
   );

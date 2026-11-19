@@ -36,7 +36,8 @@ import {
   Layers,
   CheckCheck,
   Clock,
-  FileText
+  FileText,
+  Wallet,
 } from 'lucide-react';
 import { Github, Linkedin } from '../components/icons/BrandIcons';
 import { toast } from 'sonner';
@@ -1022,7 +1023,9 @@ export default function Profile() {
                   </div>
                   <p className="text-xs text-ink/50 font-medium truncate">
                     {isOwner
-                      ? 'Completed profiles appear higher in search and attract 3x more hirer project invitations.'
+                      ? (!p.payoutDetails?.upiId && !p.payoutDetails?.accountNumber
+                          ? 'Missing Payout Details: Setup your UPI ID in Edit Profile to reach 100% and enable automated milestone payouts.'
+                          : 'Completed profiles appear higher in search and attract 3x more hirer project invitations.')
                       : 'Verified marketplace profile with authenticated projects, portfolio case studies, and work preferences.'}
                   </p>
                 </div>
@@ -1837,6 +1840,102 @@ export default function Profile() {
               {/* RIGHT COLUMN: Work Preferences, Verification & Trust, Availability & Response Time (4 cols) */}
               <div className="lg:col-span-4 space-y-6">
                 
+                {/* PRIVATE OWNER-ONLY PAYOUT & UPI STATUS CARD */}
+                {isOwner && (
+                  <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-purple/25 shadow-[0_4px_24px_rgba(124,58,237,0.06)] space-y-4 relative overflow-hidden">
+                    <div className="flex items-center justify-between border-b border-border/60 pb-3.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-purple/10 text-purple flex items-center justify-center shrink-0">
+                          <Wallet size={17} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-display font-bold text-base text-ink">
+                              Payout Destination
+                            </h3>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple/10 text-purple border border-purple/20">
+                              Private to you
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-ink/50 font-medium mt-0.5">
+                            Direct automated escrow disbursements
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => navigate('/profile/edit')}
+                        className="btn-secondary !py-1.5 !px-3 !text-xs inline-flex items-center gap-1 shrink-0"
+                        title="Edit Payout Destination"
+                      >
+                        <Edit3 size={12} />
+                        <span>Edit</span>
+                      </button>
+                    </div>
+
+                    {p.payoutDetails?.upiId ? (
+                      <div className="space-y-3">
+                        <div className="p-3.5 rounded-2xl bg-soft border border-border/70 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-ink/50">
+                              Instant UPI (IMPS)
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              Active • Instant IMPS
+                            </span>
+                          </div>
+                          <div className="font-mono font-bold text-sm sm:text-base text-ink truncate select-all">
+                            {p.payoutDetails.upiId}
+                          </div>
+                          <p className="text-[11px] text-ink/65 leading-relaxed">
+                            When hirers approve milestones, 90% net earnings are immediately transferred to this UPI address.
+                          </p>
+                        </div>
+                      </div>
+                    ) : p.payoutDetails?.accountNumber ? (
+                      <div className="space-y-3">
+                        <div className="p-3.5 rounded-2xl bg-soft border border-border/70 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-ink/50">
+                              Bank Account Transfer
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              Active Payouts
+                            </span>
+                          </div>
+                          <div className="font-mono font-bold text-sm text-ink truncate">
+                            {p.payoutDetails.bankName ? `${p.payoutDetails.bankName} · ` : ''}A/C ending in {p.payoutDetails.accountNumber.slice(-4)}
+                          </div>
+                          <p className="text-[11px] text-ink/65">
+                            IFSC: {p.payoutDetails.ifscCode} · Holder: {p.payoutDetails.accountHolderName}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-3">
+                        <div className="flex items-start gap-2.5">
+                          <AlertCircle size={17} className="text-amber-600 shrink-0 mt-0.5" />
+                          <div className="space-y-1">
+                            <h4 className="font-bold text-xs text-amber-900">
+                              UPI Payout Not Configured Yet
+                            </h4>
+                            <p className="text-[11px] text-amber-800/80 leading-relaxed">
+                              Add your UPI ID in Edit Profile so clients' milestone sign-offs deposit earnings directly into your real bank account via IMPS.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => navigate('/profile/edit')}
+                          className="w-full btn-primary !py-2 !text-xs justify-center shadow-xs"
+                        >
+                          <span>Setup UPI ID in Edit Profile</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* SECTION 5: WORK PREFERENCES */}
                 <div className="bg-white rounded-[28px] p-6 sm:p-7 border border-border/70 shadow-[0_4px_24px_rgba(0,0,0,0.04)] space-y-4">
                   <div className="flex items-center justify-between border-b border-border/60 pb-3">
