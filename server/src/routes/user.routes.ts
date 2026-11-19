@@ -21,7 +21,7 @@ router.post('/profile', protect, createOrUpdateProfile);
 router.put('/profile', protect, createOrUpdateProfile);
 
 // Support both multipart file uploads and JSON payload for portfolio
-router.post('/portfolio', protect, upload.single('image'), (req, res, next) => {
+router.post('/portfolio', protect, upload.single('image'), (req: any, res: any, next: any) => {
   if (req.file) {
     return uploadPortfolio(req, res, next);
   }
