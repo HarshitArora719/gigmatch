@@ -620,6 +620,8 @@ export const addPortfolioItem = asyncHandler(async (req: any, res: Response) => 
   profile.profileCompletion = score;
   profile.profileCompletionPercentage = score;
   await profile.save();
+  invalidateMeCache(req.user.id);
+  invalidateUserCache(req.user.id);
 
   return ApiResponse.success(res, { portfolio: profile.portfolio }, 'Portfolio item added successfully', 201);
 });
@@ -668,6 +670,8 @@ export const updatePortfolioItem = asyncHandler(async (req: any, res: Response) 
   profile.profileCompletion = score;
   profile.profileCompletionPercentage = score;
   await profile.save();
+  invalidateMeCache(req.user.id);
+  invalidateUserCache(req.user.id);
 
   return ApiResponse.success(res, { portfolio: profile.portfolio }, 'Project item updated successfully');
 });
@@ -686,6 +690,8 @@ export const deletePortfolioItem = asyncHandler(async (req: any, res: Response) 
   profile.profileCompletion = score;
   profile.profileCompletionPercentage = score;
   await profile.save();
+  invalidateMeCache(req.user.id);
+  invalidateUserCache(req.user.id);
 
   return ApiResponse.success(res, { portfolio: profile.portfolio }, 'Portfolio item removed');
 });

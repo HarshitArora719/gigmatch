@@ -5,6 +5,7 @@ import Order from '../models/Order.model';
 import Profile from '../models/Profile.model';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ApiResponse } from '../utils/apiResponse';
+import { invalidateMeCache } from './user.controller';
 
 export const createReview = asyncHandler(async (req: any, res: Response) => {
   const { orderId, rating, comment } = req.body;
@@ -64,6 +65,7 @@ export const createReview = asyncHandler(async (req: any, res: Response) => {
     { rating: averageRating, totalReviews },
     { upsert: true, new: true }
   );
+  invalidateMeCache(targetUserId.toString());
 
   return ApiResponse.success(res, { review, averageRating, totalReviews }, 'Review submitted successfully', 201);
 });

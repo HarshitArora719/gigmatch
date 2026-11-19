@@ -42,8 +42,42 @@ export default function GigDetail() {
   const navigate = useNavigate();
   const { user, setAuthModal } = useAuthStore();
 
-  const [gig, setGig] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [gig, setGig] = useState<any>(() => {
+    try {
+      const cached = sessionStorage.getItem('gm_cached_gigs');
+      if (cached && id) {
+        const list = JSON.parse(cached);
+        if (Array.isArray(list)) {
+          const found = list.find((g: any) => (g._id || g.id) === id);
+          if (found) return found;
+        }
+      }
+      const homeCached = sessionStorage.getItem('gm_cached_home_gigs');
+      if (homeCached && id) {
+        const list = JSON.parse(homeCached);
+        if (Array.isArray(list)) {
+          const found = list.find((g: any) => (g._id || g.id) === id);
+          if (found) return found;
+        }
+      }
+    } catch {}
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    try {
+      const cached = sessionStorage.getItem('gm_cached_gigs');
+      if (cached && id) {
+        const list = JSON.parse(cached);
+        if (Array.isArray(list) && list.some((g: any) => (g._id || g.id) === id)) return false;
+      }
+      const homeCached = sessionStorage.getItem('gm_cached_home_gigs');
+      if (homeCached && id) {
+        const list = JSON.parse(homeCached);
+        if (Array.isArray(list) && list.some((g: any) => (g._id || g.id) === id)) return false;
+      }
+    } catch {}
+    return true;
+  });
   const [showProposal, setShowProposal] = useState(false);
   const [proposal, setProposal] = useState({ coverLetter: '', proposedPrice: '', estimatedDays: '' });
   const [submitting, setSubmitting] = useState(false);
@@ -78,7 +112,9 @@ export default function GigDetail() {
 
   const fetchGig = async () => {
     try {
-      setLoading(true);
+      if (!gig) {
+        setLoading(true);
+      }
       const res = await api.get(`/api/gigs/${id}`);
       const gigData = res.data.data.gig;
       setGig(gigData);
@@ -135,6 +171,11 @@ export default function GigDetail() {
         proposalsCount: (prev.proposalsCount || 0) + 1
       } : prev));
       toast.success('Proposal submitted successfully!');
+      try {
+        sessionStorage.removeItem('gm_cached_gigs');
+        sessionStorage.removeItem('gm_cached_home_gigs');
+        sessionStorage.removeItem('gm_profile_me');
+      } catch {}
       setShowProposal(false);
       navigate('/dashboard?tab=Proposals');
     } catch (e: any) {

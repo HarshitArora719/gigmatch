@@ -20,6 +20,7 @@ import {
   transferMilestonePayout,
 } from '../services/escrow.service';
 import { completeOrderActivation } from './payment.controller';
+import { invalidateMeCache } from './user.controller';
 
 // ─── Accept Proposal & Create Order ─────────────────────────────────────────
 
@@ -363,6 +364,8 @@ export const updateMilestoneStatus = asyncHandler(async (req: any, res: Response
     order.status = 'completed';
     order.completedAt = new Date();
     await Gig.findByIdAndUpdate(order.gig, { status: 'completed' });
+    invalidateMeCache(order.client.toString());
+    invalidateMeCache(order.freelancer.toString());
   }
 
   await order.save();
@@ -811,6 +814,8 @@ export const approveAndRelease = asyncHandler(async (req: any, res: Response) =>
   order.completedAt = new Date();
   order.paymentReleasedAt = new Date();
   await order.save();
+  invalidateMeCache(order.client.toString());
+  invalidateMeCache(order.freelancer.toString());
 
   // Record settlement in MongoDB Payment collection
   await Payment.create({

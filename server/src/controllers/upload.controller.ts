@@ -130,6 +130,8 @@ export const uploadPortfolio = asyncHandler(async (req: any, res: Response) => {
           profile!.profileCompletion = score;
           profile!.profileCompletionPercentage = score;
           await profile!.save();
+          invalidateMeCache(req.user.id);
+          invalidateUserCache(req.user.id);
 
           return ApiResponse.success(res, { profile }, 'Portfolio item added successfully');
         }
@@ -156,6 +158,8 @@ export const uploadPortfolio = asyncHandler(async (req: any, res: Response) => {
       profile.profileCompletion = score;
       profile.profileCompletionPercentage = score;
       await profile.save();
+      invalidateMeCache(req.user.id);
+      invalidateUserCache(req.user.id);
       return ApiResponse.success(res, { profile }, 'Portfolio item added successfully');
     }
   } else {
@@ -176,6 +180,8 @@ export const uploadPortfolio = asyncHandler(async (req: any, res: Response) => {
     profile.profileCompletion = score;
     profile.profileCompletionPercentage = score;
     await profile.save();
+    invalidateMeCache(req.user.id);
+    invalidateUserCache(req.user.id);
     return ApiResponse.success(res, { profile }, 'Portfolio item added successfully');
   }
 });
@@ -203,6 +209,8 @@ export const uploadResume = asyncHandler(async (req: any, res: Response) => {
         profile!.profileCompletion = score;
         profile!.profileCompletionPercentage = score;
         await profile!.save();
+        invalidateMeCache(req.user.id);
+        invalidateUserCache(req.user.id);
         return ApiResponse.success(res, { resumeUrl: uploaded.secure_url }, 'Resume uploaded successfully');
       }
     );
@@ -216,6 +224,8 @@ export const uploadResume = asyncHandler(async (req: any, res: Response) => {
     profile.profileCompletion = score;
     profile.profileCompletionPercentage = score;
     await profile.save();
+    invalidateMeCache(req.user.id);
+    invalidateUserCache(req.user.id);
     return ApiResponse.success(res, { resumeUrl: fileUrl }, 'Resume uploaded successfully');
   }
 });

@@ -187,6 +187,11 @@ export default function PostGig() {
         images: imageList,
       });
       localStorage.removeItem('gigmatch_post_gig_draft');
+      try {
+        sessionStorage.removeItem('gm_cached_gigs');
+        sessionStorage.removeItem('gm_cached_home_gigs');
+        sessionStorage.removeItem('gm_profile_me');
+      } catch {}
       toast.success('Gig posted successfully!');
       navigate('/dashboard?tab=Projects');
     } catch {

@@ -47,25 +47,75 @@ export default function Profile() {
   const { user: currentUser } = useAuthStore();
   const navigate = useNavigate();
 
-  const [profileData, setProfileData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const target = userId || 'me';
+  const targetKey = `gm_profile_${target}`;
+
+  const [profileData, setProfileData] = useState<any>(() => {
+    try {
+      const cached = sessionStorage.getItem(targetKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+    return null;
+  });
+
+  const [loading, setLoading] = useState<boolean>(() => {
+    try {
+      const cached = sessionStorage.getItem(targetKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') return false;
+      }
+    } catch {}
+    return true;
+  });
+
   const [error, setError] = useState<string | null>(null);
   const [historyFilter, setHistoryFilter] = useState<'All' | 'Completed' | 'Recent'>('All');
 
   useEffect(() => {
+    // Sync immediately from session cache if available to prevent any delay
+    try {
+      const currentTargetKey = `gm_profile_${userId || 'me'}`;
+      const cached = sessionStorage.getItem(currentTargetKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && typeof parsed === 'object') {
+          setProfileData(parsed);
+          setLoading(false);
+        }
+      }
+    } catch {}
     fetchProfileData();
   }, [userId, currentUser?.id]);
 
   const fetchProfileData = async () => {
+    const currentTarget = userId || 'me';
+    const currentKey = `gm_profile_${currentTarget}`;
     try {
-      setLoading(true);
+      // Only show full loading skeleton if we don't already have cached profile data
+      const hasCached = sessionStorage.getItem(currentKey);
+      if (!hasCached && !profileData) {
+        setLoading(true);
+      }
       setError(null);
-      const target = userId || 'me';
-      const res = await api.get(`/api/users/profile/${target}`);
-      setProfileData(res.data.data);
+      const res = await api.get(`/api/users/profile/${currentTarget}`);
+      const freshData = res.data.data;
+      setProfileData(freshData);
+      try {
+        sessionStorage.setItem(currentKey, JSON.stringify(freshData));
+      } catch {}
     } catch (err: any) {
       console.error('Failed to fetch profile:', err);
-      setError(err.response?.data?.message || 'Failed to load profile');
+      // Only set blocking error if we have no profile data to display
+      setProfileData((curr: any) => {
+        if (!curr) {
+          setError(err.response?.data?.message || 'Failed to load profile');
+        }
+        return curr;
+      });
     } finally {
       setLoading(false);
     }

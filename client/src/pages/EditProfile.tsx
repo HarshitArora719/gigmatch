@@ -307,6 +307,7 @@ export default function EditProfile() {
       setAvatar(newUrl);
       updateUser({ avatar: newUrl });
       await fetchMe();
+      try { sessionStorage.removeItem('gm_profile_me'); } catch {}
       toast.success('Avatar photo uploaded successfully!', { id: 'avatar-upload' });
     } catch (err: any) {
       toast.error(err.response?.data?.message || 'Failed to upload avatar photo', { id: 'avatar-upload' });
@@ -316,6 +317,7 @@ export default function EditProfile() {
   const handleRemoveAvatar = () => {
     setAvatar('');
     updateUser({ avatar: '' });
+    try { sessionStorage.removeItem('gm_profile_me'); } catch {}
     toast.info('Custom photo removed. Default initials avatar will be used.');
   };
 
@@ -504,6 +506,10 @@ export default function EditProfile() {
         avatarColor,
       });
       await fetchMe();
+      try {
+        sessionStorage.removeItem('gm_profile_me');
+        if (user?.id) sessionStorage.removeItem(`gm_profile_${user.id}`);
+      } catch {}
       toast.success('Profile updated successfully!');
       navigate('/profile');
     } catch (err) {
@@ -568,6 +574,10 @@ export default function EditProfile() {
       }
 
       setPortfolio(res.data.data.portfolio);
+      try {
+        sessionStorage.removeItem('gm_profile_me');
+        if (user?.id) sessionStorage.removeItem(`gm_profile_${user.id}`);
+      } catch {}
       setNewProject({
         title: '',
         description: '',
@@ -595,6 +605,10 @@ export default function EditProfile() {
     try {
       const res = await api.delete(`/api/users/portfolio/${itemId}`);
       setPortfolio(res.data.data.portfolio);
+      try {
+        sessionStorage.removeItem('gm_profile_me');
+        if (user?.id) sessionStorage.removeItem(`gm_profile_${user.id}`);
+      } catch {}
       toast.success('Portfolio item removed');
     } catch (error) {
       console.error(error);
